@@ -2,7 +2,7 @@
 
 "use strict";
 
-const gff_version = "r4";
+const gff_version = "r5";
 
 /*********************************
  * Command-line argument parsing *
@@ -82,11 +82,15 @@ function* getopt(argv, ostr, longopts) {
  * Interval query *
  ******************/
 
-function iit_sort_copy(a) {
-	a.sort((x, y) => (x.st - y.st));
+function iit_sort_dedup_copy(a) {
+	a.sort((x, y) => (x.st != y.st? x.st - y.st : x.en - y.en));
 	const b = [];
-	for (let i = 0; i < a.length; ++i)
-		b.push({ st: a[i].st, en: a[i].en, max: 0, data: a[i].data });
+	for (let i0 = 0, i = 1; i <= a.length; ++i) {
+		if (i == a.length || a[i0].st != a[i].st || a[i0].en != a[i].en) {
+			b.push({ st:a[i0].st, en:a[i0].en, max:0 });
+			i0 = i;
+		}
+	}
 	return b;
 }
 
@@ -153,6 +157,10 @@ function* k8_readline(fn) {
 /***************
  *** minigff ***
  ***************/
+
+/******************
+ * Format parsing *
+ ******************/
 
 class Transcript {
 	constructor(tid, ctg, strand) {
@@ -347,6 +355,112 @@ function gff_cmd_all2bed(args)
 	}
 }
 
+/************
+ * Evaluate *
+ ************/
+
+class BaseIndex {
+	constructor() {
+		this.ctg = {};
+	}
+	add(v, cds_only) { // add a Transcript object
+		if (this.ctg[v.ctg] == null) this.ctg[v.ctg] = { exon:[], junc:[] };
+		let p = this.ctg[v.ctg], exon;
+		if (cds_only) {
+			exon = [];
+			for (let i = 0; i < v.exon.length; ++i)
+				if (v.cds_st < v.exon[i].en && v.exon[i].st < v.cds_en)
+					exon.push(v.exon[i]);
+		} else exon = v.exon;
+		for (let i = 0; i < exon.length; ++i)
+			p.exon.push({ st:exon[i].st, en:exon[i].en });
+		for (let i = 1; i < exon.length; ++i)
+			p.junc.push({ st:exon[i-1].en, en:exon[i].st });
+	}
+	index() {
+		for (const name in this.ctg) {
+			let p = this.ctg[name];
+			p.exon = iit_sort_dedup_copy(p.exon);
+			p.junc = iit_sort_dedup_copy(p.junc);
+			iit_index(p.exon);
+			iit_index(p.junc);
+		}
+	}
+	ov_exon(name, st, en) {
+		return this.ctg[name] == null? [] : iit_overlap(this.ctg[name].exon, st, en);
+	}
+	ov_junc(name, st, en) {
+		return this.ctg[name] == null? [] : iit_overlap(this.ctg[name].junc, st, en);
+	}
+}
+
+function gff_cmd_eval(args)
+{
+	let print_err = false, first_only = false, chr_only = false, skip_last = false, skip_first = false, cds_only = false;
+	for (const o of getopt(args, "e1ctfd", [])) {
+		if (o.opt == "-e") print_err = true;
+		else if (o.opt == "-1") first_only = true;
+		else if (o.opt == "-c") chr_only = true;
+		else if (o.opt == "-f") skip_first = true;
+		else if (o.opt == "-t") skip_first = skip_last = true;
+		else if (o.opt == "-d") cds_only = true;
+	}
+	if (args.length < 2) {
+		print("Usage: minigff.js eval [options] <base.file> <test.file>");
+		print("Options:");
+		print("  -d      ignore UTRs in BASE");
+		print("  -1      only evaluate the first alignment of each query");
+		print("  -c      only consider alignments to contig /^(chr)?([0-9]+|X|Y)$/");
+		print("  -f      skip the first exon in TEST");
+		print("  -t      skip the last exon in TEST");
+		print("  -e      print error intervals");
+		return;
+	}
+
+	// load base annotation
+	let base = new BaseIndex();
+	for (let v of gff_read(args[0]))
+		base.add(v, cds_only);
+	base.index();
+
+	// evaluate test annotation
+	let last_tid = null, tot_exon = 0, ann_exon = 0, nov_exon = 0, tot_junc = 0, ann_junc = 0, nov_junc = 0, n_multi = 0, n_test = 0;
+	for (let v of gff_read(args[1])) {
+		if (chr_only && !/^(chr)?([0-9]+|X|Y)$/.test(v.ctg)) continue;
+		if (first_only && last_tid == v.tid) continue;
+		last_tid = v.tid;
+		++n_test;
+		if (v.exon.length > 1) ++n_multi;
+		for (let i = 0; i < v.exon.length; ++i) {
+			const st = v.exon[i].st, en = v.exon[i].en;
+			let found = 0, ov = base.ov_exon(v.ctg, st, en);
+			if (ov.length == 0) ++nov_exon;
+			for (let j = 0; j < ov.length; ++j)
+				if (ov[j].st == st && ov[j].en == en)
+					++found;
+			++tot_exon;
+			if (found > 0) ++ann_exon;
+		}
+		for (let i = 1; i < v.exon.length; ++i) {
+			const st = v.exon[i-1].en, en = v.exon[i].st;
+			let found = 0, ov = base.ov_junc(v.ctg, st, en);
+			if (ov.length == 0) ++nov_junc;
+			for (let j = 0; j < ov.length; ++j)
+				if (ov[j].st == st && ov[j].en == en)
+					++found;
+			++tot_junc;
+			if (found > 0) ++ann_junc;
+		}
+	}
+	print("CC\tNN  nTest  nSingleton");
+	print("CC\tNE  nExon  nAnnoExon  ratio  nNovelExon");
+	print("CC\tNJ  nJunc  nAnnoJunc  ratio  nNovelJunc");
+	print("CC");
+	print("NN", n_test, n_test - n_multi);
+	print("NE", tot_exon, ann_exon, (ann_exon / tot_exon).toFixed(4), nov_exon);
+	print("NJ", tot_junc, ann_junc, (ann_junc / tot_junc).toFixed(4), nov_junc);
+}
+
 /*****************
  * Main function *
  *****************/
@@ -357,13 +471,15 @@ function main(args)
 		print("Usage: minigff.js <command> [arguments]");
 		print("Commands:");
 		print("  all2bed        convert BED12/GFF/GTF/PAF to BED12");
+		print("  eval           evaluate agaist reference annotations");
 		print("  version        print version number");
 		exit(1);
 	}
 
 	var cmd = args.shift();
-	if (cmd == 'all2bed') gff_cmd_all2bed(args);
-	else if (cmd == 'version') {
+	if (cmd == "all2bed") gff_cmd_all2bed(args);
+	else if (cmd == "eval") gff_cmd_eval(args);
+	else if (cmd == "version") {
 		print(gff_version);
 	} else throw Error("unrecognized command: " + cmd);
 }
