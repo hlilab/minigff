@@ -2,7 +2,7 @@
 
 "use strict";
 
-const gff_version = "r1";
+const gff_version = "r2";
 
 /*********************************
  * Command-line argument parsing *
@@ -155,9 +155,11 @@ function* k8_readline(fn) {
  **************/
 
 class Transcript {
-	constructor(tid, ctg, st, en, strand) {
-		this.tid = this.disp_name = tid, this.ctg = ctg, this.st = st, this.en = en, this.strand = strand;
-		this.cds_st = -1, this.cds_en = -1;
+	constructor(tid, ctg, strand) {
+		this.tid = tid, this.ctg = ctg, this.strand = strand;
+		this.st = this.en = this.cds_st = this.cds_en = -1;
+		this.disp_name = null;
+		this.type = null;
 		this.gid = null, this.gname = null;
 		this.err = 0, this.done = false;
 		this.exon = [];
@@ -167,6 +169,8 @@ class Transcript {
 		this.exon = a;
 		const st = a[0].st;
 		const en = a[a.length - 1].en;
+		if (this.st < 0) this.st = st;
+		if (this.en < 0) this.en = en;
 		if (st != this.st || en != this.en) this.err |= 1;
 		for (let i = 1; i < a.length; ++i)
 			if (a[i].st < a[i-1].en)
@@ -174,7 +178,10 @@ class Transcript {
 		if (this.cds_st < 0) this.cds_st = st;
 		if (this.cds_en < 0) this.cds_en = en;
 		if (this.cds_st < st || this.cds_en > en) this.err |= 4;
+		this.disp_name = this.gname && this.type? [this.tid, this.type, this.gname].join("|") : this.tid;
 		if (this.err == 0) this.done = true;
+		if (!this.done) this.perror();
+		return this.done;
 	}
 	perror() {
 		if (this.err & 1) warn(`ERROR: inconsistent transcript and exon coordinates for transcript ${this.tid}`);
@@ -193,6 +200,7 @@ class Transcript {
 
 function* gff_read(fn) {
 	const re_fmt = /^(##PAF\t\S+(\t\d+){3}[+-])|^(\S+(\t\d+){3}[+-])|^(\S+\t\d+\t\d+\t\S+\t\S+\t[+-])|^((\S+\t){3}\d+\t\d+\t\S+\t[+-])/;
+	const re_gff = /\b(transcript_id|transcript_type|transcript_biotype|gene_name|gene_id|gbkey|tag)( "([^"]+)"|=([^;]+));/g;
 	let v = null;
 	for (const line of k8_readline(fn)) {
 		let m;
@@ -201,9 +209,9 @@ function* gff_read(fn) {
 		if (ft < 0) continue;
 		if (ft == 1) {
 			let t = line.split("\t");
-			v = new Transcript(t[3], t[0], parseInt(t[1]), parseInt(t[2]), t[5]);
-			v.cds_st = parseInt(t[6]);
-			v.cds_en = parseInt(t[7]);
+			v = new Transcript(t[3], t[0], t[5]);
+			v.st = parseInt(t[1]), v.en = parseInt(t[2]);
+			v.cds_st = parseInt(t[6]), v.cds_en = parseInt(t[7]);
 			const n_exon = parseInt(t[9]);
 			const lens = t[10].split(",", n_exon);
 			const offs = t[11].split(",", n_exon);
@@ -211,11 +219,41 @@ function* gff_read(fn) {
 				const off = parseInt(offs[i]), len = parseInt(lens[i]);
 				v.exon.push({ st: v.st + off, en: v.st + off + len });
 			}
-			v.finish();
-			if (!v.done) v.perror();
-			else yield v;
+			if (v.finish()) yield v;
+			v = null;
+		} else if (ft == 2) {
+			let t = line.split("\t");
+			if (t[2] != "exon" && t[2] != "CDS") continue;
+			let m, tid = null, gid = null, type = "", gname = null, biotype = "", ens_canonical = false;
+			while ((m = re_gff.exec(t[8])) != null) {
+				const key = m[1], val = m[3]? m[3] : m[4];
+				if (key == "transcript_id") tid = val;
+				else if (key == "transcript_type") type = val;
+				else if (key == "transcript_biotype" || key == "gbkey") biotype = val;
+				else if (key == "gene_name") gname = val;
+				else if (key == "gene_id") gid = val;
+				else if (key == "tag" && val == "Ensembl_canonical") ens_canonical = true;
+			}
+			if (tid == null) continue;
+			if (gname == null) gname = gid? gid : "*"; // infer gene name
+			if (gid == null) gid = gname; // if gene_id missing, use gene name to identify a gene
+			if (type == "" && biotype != "") type = biotype; // infer transcript type
+			if (v == null || v.tid != tid) {
+				if (v != null && v.finish()) yield v;
+				v = new Transcript(tid, t[0], t[6]);
+				v.type = type, v.gid = gid, v.gname = gname;
+			}
+			const st = parseInt(t[3]) - 1;
+			const en = parseInt(t[4]);
+			if (t[2] === "CDS") {
+				v.cds_st = v.cds_st >= 0 && v.cds_st < st? v.cds_st : st;
+				v.cds_en = v.cds_en >= 0 && v.cds_en > en? v.cds_en : en;
+			} else if (t[2] === "exon") {
+				v.exon.push({ st:st, en:en });
+			}
 		}
 	}
+	if (v != null && v.finish()) yield v;
 }
 
 function gff_cmd_read(args)
