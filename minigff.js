@@ -2,7 +2,7 @@
 
 "use strict";
 
-const gff_version = "r2";
+const gff_version = "r3";
 
 /*********************************
  * Command-line argument parsing *
@@ -150,9 +150,9 @@ function* k8_readline(fn) {
 	buf.destroy();
 }
 
-/**************
- *** gfform ***
- **************/
+/***************
+ *** minigff ***
+ ***************/
 
 class Transcript {
 	constructor(tid, ctg, strand) {
@@ -161,6 +161,8 @@ class Transcript {
 		this.disp_name = null;
 		this.type = null;
 		this.gid = null, this.gname = null;
+		this.pri = null;
+		this.score = -1;
 		this.err = 0, this.done = false;
 		this.exon = [];
 	}
@@ -194,21 +196,26 @@ class Transcript {
 			lens.push(this.exon[i].en - this.exon[i].st);
 			offs.push(this.exon[i].st - this.st);
 		}
-		return [this.ctg, this.st, this.en, this.disp_name, ".", this.strand, this.cds_st, this.cds_en, ".", this.exon.length, lens.join(",")+",", offs.join(",")+","];
+		return [this.ctg, this.st, this.en, this.disp_name, this.score < 0? "." : this.score, this.strand, this.cds_st, this.cds_en, ".",
+			this.exon.length, lens.join(",")+",", offs.join(",")+","];
 	}
 }
 
 function* gff_read(fn) {
-	const re_fmt = /^(##PAF\t\S+(\t\d+){3}[+-])|^(\S+(\t\d+){3}[+-])|^(\S+\t\d+\t\d+\t\S+\t\S+\t[+-])|^((\S+\t){3}\d+\t\d+\t\S+\t[+-])/;
+	const re_fmt = /^(##PAF\t\S+(\t\d+){3}\t[+-])|^(\S+(\t\d+){3}\t[+-])|^(\S+\t\d+\t\d+\t\S+\t\S+\t[+-])|^((\S+\t){3}\d+\t\d+\t\S+\t[+-])/;
 	const re_gff = /\b(transcript_id|transcript_type|transcript_biotype|gene_name|gene_id|gbkey|tag)( "([^"]+)"|=([^;]+));/g;
-	let v = null;
+	const re_cigar = /(\d+)([MIDNSHP=XFGUV])/g;
+	let v = null, fmt0 = -1;
 	for (const line of k8_readline(fn)) {
 		let m;
 		if ((m = re_fmt.exec(line)) == null) continue;
-		let ft = m[5]? 1 : m[6]? 2 : m[3]? 3 : m[1]? 4 : -1; // 1=BED, 2=GFF, 3=PAF, 4=##PAF
-		if (ft < 0) continue;
-		if (ft == 1) {
+		let fmt = m[5]? 1 : m[6]? 2 : m[3]? 3 : m[1]? 4 : -1; // 1=BED, 2=GFF, 3=PAF, 4=##PAF
+		if (fmt < 0) continue;
+		if (fmt0 < 0) fmt0 = fmt;
+		if (fmt0 != fmt) continue; // only allow one format
+		if (fmt == 1) { // BED12
 			let t = line.split("\t");
+			if (t.length < 12) continue;
 			v = new Transcript(t[3], t[0], t[5]);
 			v.st = parseInt(t[1]), v.en = parseInt(t[2]);
 			v.cds_st = parseInt(t[6]), v.cds_en = parseInt(t[7]);
@@ -221,7 +228,7 @@ function* gff_read(fn) {
 			}
 			if (v.finish()) yield v;
 			v = null;
-		} else if (ft == 2) {
+		} else if (fmt == 2) { // GTF or GFF3
 			let t = line.split("\t");
 			if (t[2] != "exon" && t[2] != "CDS") continue;
 			let m, tid = null, gid = null, type = "", gname = null, biotype = "", ens_canonical = false;
@@ -251,6 +258,77 @@ function* gff_read(fn) {
 			} else if (t[2] === "exon") {
 				v.exon.push({ st:st, en:en });
 			}
+		} else if (fmt == 3 || fmt == 4) { // PAF
+			let m, t = line.split("\t");
+			if (fmt == 4) t.shift();
+			let cigar = null, pri = null, ms = null, score = null;
+			for (let i = 12; i < t.length; ++i) {
+				const key = t[i].substr(0, 5);
+				if (key == "cg:Z:") cigar = t[i].substr(5);
+				else if (key == "tp:A:") pri = t[i].substr(5) == "P"? true : false;
+				else if (key == "ms:i:") ms = parseInt(t[i].substr(5));
+				else if (key == "AS:i:") score = parseInt(t[i].substr(5));
+			}
+			if (cigar == null) continue;
+			if (ms != null) score = ms;
+			const st = parseInt(t[7]);
+			const en = parseInt(t[8]);
+			let rlen = 0, is_aa = false;
+			while ((m = re_cigar.exec(cigar)) != null) {
+				const op = m[2], len = parseInt(m[1]);
+				if (op == "U" || op == "V" || op == "F" || op == "G") is_aa = true;
+				else if (op == "M" || op == "X" || op == "=" || op == "N" || op == "D") rlen += len;
+			}
+			if (!is_aa)
+				is_aa = rlen == en - st? false : true;
+			v = new Transcript(t[0], t[5], t[4]);
+			if (score != null) v.score = score;
+			if (pri != null) v.pri = pri;
+			if (is_aa) { // amino acid PAF
+				let x = 0, x0 = 0, e = [];
+				while ((m = re_cigar.exec(cigar)) != null) {
+					const len = parseInt(m[1]), op = m[2];
+					if (op == 'N') {
+						e.push([x0, x]);
+						x0 = x + len, x += len;
+					} else if (op == 'U') {
+						e.push([x0, x + 1]);
+						x0 = x + len - 2, x += len;
+					} else if (op == 'V') {
+						e.push([x0, x + 2]);
+						x0 = x + len - 1, x += len;
+					} else if (op == 'M' || op == 'X' || op == '=' || op == 'D') {
+						x += len * 3;
+					} else if (op == 'F' || op == 'G') {
+						x += len;
+					}
+				}
+				e.push([x0, x]);
+				if (x != en - st) throw Error("inconsistent CIGAR");
+				if (t[4] == '+') {
+					for (let i = 0; i < e.length; ++i)
+						v.exon.push({ st: st + e[i][0], en: st + e[i][1] });
+				} else if (t[4] == '-') { // For protein-to-genome alignment, the coordinates are on the query strand. Need to flip them.
+					const glen = en - st;
+					for (let i = e.length - 1; i >= 0; --i)
+						v.exon.push({ st: st + (glen - e[i][1]), en: st + (glen - e[i][0]) });
+				}
+			} else { // nucleotide PAF
+				let x = st, x0 = st;
+				while ((m = re_cigar.exec(cigar)) != null) {
+					const len = parseInt(m[1]), op = m[2];
+					if (op == 'N') {
+						v.exon.push({ st:x0, en:x });
+						x0 = x + len, x += len;
+					} else if (op == 'M' || op == 'X' || op == '=' || op == 'D') {
+						x += len;
+					}
+				}
+				v.exon.push({ st:x0, en:x });
+				if (x != en) throw Error("inconsistent CIGAR");
+			}
+			if (v.finish()) yield v;
+			v = null;
 		}
 	}
 	if (v != null && v.finish()) yield v;
