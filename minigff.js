@@ -2,7 +2,7 @@
 
 "use strict";
 
-const gff_version = "r3";
+const gff_version = "r4";
 
 /*********************************
  * Command-line argument parsing *
@@ -334,12 +334,12 @@ function* gff_read(fn) {
 	if (v != null && v.finish()) yield v;
 }
 
-function gff_cmd_read(args)
+function gff_cmd_all2bed(args)
 {
 	for (const o of getopt(args, "", [])) {
 	}
 	if (args.length == 0) {
-		print("Usage: minigff.js read [options] <in.file>");
+		print("Usage: minigff.js all2bed [options] <in.file>");
 		return;
 	}
 	for (let v of gff_read(args[0])) {
@@ -356,13 +356,13 @@ function main(args)
 	if (args.length == 0) {
 		print("Usage: minigff.js <command> [arguments]");
 		print("Commands:");
-		print("  read           parse BED12/GFF/GTF/PAF");
+		print("  all2bed        convert BED12/GFF/GTF/PAF to BED12");
 		print("  version        print version number");
 		exit(1);
 	}
 
 	var cmd = args.shift();
-	if (cmd == 'read') gff_cmd_read(args);
+	if (cmd == 'all2bed') gff_cmd_all2bed(args);
 	else if (cmd == 'version') {
 		print(gff_version);
 	} else throw Error("unrecognized command: " + cmd);
