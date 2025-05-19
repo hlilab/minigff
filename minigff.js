@@ -2,7 +2,7 @@
 
 "use strict";
 
-const gff_version = "r9";
+const gff_version = "r10";
 
 /*********************************
  * Command-line argument parsing *
@@ -210,15 +210,31 @@ class Transcript {
 }
 
 function* gff_read(fn, cds_only) {
-	const re_fmt = /^(##PAF\t\S+(\t\d+){3}\t[+-])|^(\S+(\t\d+){3}\t[+-])|^(\S+\t\d+\t\d+\t\S+\t\S+\t[+-])|^((\S+\t){3}\d+\t\d+\t\S+\t[+-])/;
+	const re_fmt = /^(##PAF\t\S+(\t\d+){3}\t[+-])|^(\S+(\t\d+){3}\t[+-])|^(\S+\t\d+\t\d+\t\S+\t\S+\t[+-])|^((\S+\t){3}\d+\t\d+\t\S+\t[+-])|^(\S+\t\d+\t\S+\t\d+\t\d+\t(\d+[MIDNSH=X])+)/;
 	const re_gff = /\b(transcript_id|transcript_type|transcript_biotype|gene_name|gene_id|gbkey|tag)( "([^"]+)"|=([^;]+));/g;
 	const re_cigar = /(\d+)([MIDNSHP=XFGUV])/g;
 	if (typeof cds_only == "undefined") cds_only = false;
+
+	function nt_cigar2exon(v, st, cigar) {
+		let m, x = st, x0 = st;
+		while ((m = re_cigar.exec(cigar)) != null) {
+			const len = parseInt(m[1]), op = m[2];
+			if (op == 'N') {
+				v.exon.push({ st:x0, en:x });
+				x0 = x + len, x += len;
+			} else if (op == 'M' || op == 'X' || op == '=' || op == 'D') {
+				x += len;
+			}
+		}
+		v.exon.push({ st:x0, en:x });
+		return x;
+	}
+
 	let v = null, fmt0 = -1;
 	for (const line of k8_readline(fn)) {
 		let m;
 		if ((m = re_fmt.exec(line)) == null) continue;
-		let fmt = m[5]? 1 : m[6]? 2 : m[3]? 3 : m[1]? 4 : -1; // 1=BED, 2=GFF, 3=PAF, 4=##PAF
+		let fmt = m[5]? 1 : m[6]? 2 : m[3]? 3 : m[1]? 4 : m[8]? 5 : -1; // 1=BED, 2=GFF, 3=PAF, 4=##PAF, 5=SAM
 		if (fmt < 0) continue;
 		if (fmt0 < 0) fmt0 = fmt;
 		if (fmt0 != fmt) continue; // only allow one format
@@ -327,19 +343,25 @@ function* gff_read(fn, cds_only) {
 						v.exon.push({ st: st + (glen - e[i][1]), en: st + (glen - e[i][0]) });
 				}
 			} else { // nucleotide PAF
-				let x = st, x0 = st;
-				while ((m = re_cigar.exec(cigar)) != null) {
-					const len = parseInt(m[1]), op = m[2];
-					if (op == 'N') {
-						v.exon.push({ st:x0, en:x });
-						x0 = x + len, x += len;
-					} else if (op == 'M' || op == 'X' || op == '=' || op == 'D') {
-						x += len;
-					}
-				}
-				v.exon.push({ st:x0, en:x });
+				let x = nt_cigar2exon(v, st, cigar);
 				if (x != en) throw Error("inconsistent CIGAR");
 			}
+			if (v.finish()) yield v;
+			v = null;
+		} else if (fmt == 5) { // SAM
+			let m, t = line.split("\t");
+			let ms = null, score = null;
+			for (let i = 11; i < t.length; ++i) {
+				const key = t[i].substr(0, 5);
+				if (key == "ms:i:") ms = parseInt(t[i].substr(5));
+				else if (key == "AS:i:") score = parseInt(t[i].substr(5));
+			}
+			if (ms != null) score = ms;
+			const flag = parseInt(t[1]);
+			v = new Transcript(t[0], t[2], flag&16? "-" : "+");
+			v.score = score;
+			v.pri = flag&0x100? true : false;
+			nt_cigar2exon(v, parseInt(t[3]) - 1, t[5]);
 			if (v.finish()) yield v;
 			v = null;
 		}
@@ -567,7 +589,7 @@ function main(args)
 	if (args.length == 0) {
 		print("Usage: minigff.js <command> [arguments]");
 		print("Commands:");
-		print("  all2bed        convert BED12/GFF/GTF/PAF to BED12");
+		print("  all2bed        convert BED12/GFF/GTF/PAF/SAM to BED12");
 		print("  eval           evaluate agaist reference annotations");
 		print("  version        print version number");
 		exit(1);
