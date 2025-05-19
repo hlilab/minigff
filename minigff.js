@@ -2,7 +2,7 @@
 
 "use strict";
 
-const gff_version = "r5";
+const gff_version = "r6";
 
 /*********************************
  * Command-line argument parsing *
@@ -347,7 +347,7 @@ function gff_cmd_all2bed(args)
 	for (const o of getopt(args, "", [])) {
 	}
 	if (args.length == 0) {
-		print("Usage: minigff.js all2bed [options] <in.file>");
+		print("Usage: minigff.js all2bed <in.file>");
 		return;
 	}
 	for (let v of gff_read(args[0])) {
@@ -368,9 +368,11 @@ class BaseIndex {
 		let p = this.ctg[v.ctg], exon;
 		if (cds_only) {
 			exon = [];
-			for (let i = 0; i < v.exon.length; ++i)
-				if (v.cds_st < v.exon[i].en && v.exon[i].st < v.cds_en)
-					exon.push(v.exon[i]);
+			for (let i = 0; i < v.exon.length; ++i) {
+				const st = v.cds_st > v.exon[i].st? v.cds_st : v.exon[i].st;
+				const en = v.cds_en < v.exon[i].en? v.cds_en : v.exon[i].en;
+				if (st < en) exon.push({ st:st, en:en });
+			}
 		} else exon = v.exon;
 		for (let i = 0; i < exon.length; ++i)
 			p.exon.push({ st:exon[i].st, en:exon[i].en });
@@ -394,21 +396,33 @@ class BaseIndex {
 	}
 }
 
+function gff_format_ov(ov)
+{
+	let x = '[';
+	for (let j = 0; j < ov.length; ++j) {
+		if (j) x += ', ';
+		x += `(${ov[j].st},${ov[j].en})`
+	}
+	x += ']';
+	return x;
+}
+
 function gff_cmd_eval(args)
 {
-	let print_err = false, first_only = false, chr_only = false, skip_last = false, skip_first = false, cds_only = false;
-	for (const o of getopt(args, "e1ctfd", [])) {
+	let print_all = false, print_err = false, first_only = false, chr_only = false, skip_last = false, skip_first = false, cds_only = false;
+	for (const o of getopt(args, "e1ctfdap", [])) {
 		if (o.opt == "-e") print_err = true;
+		else if (o.opt == "-p") print_all = true;
 		else if (o.opt == "-1") first_only = true;
 		else if (o.opt == "-c") chr_only = true;
 		else if (o.opt == "-f") skip_first = true;
 		else if (o.opt == "-t") skip_first = skip_last = true;
-		else if (o.opt == "-d") cds_only = true;
+		else if (o.opt == "-d" || o.opt == "-a") cds_only = true;
 	}
 	if (args.length < 2) {
 		print("Usage: minigff.js eval [options] <base.file> <test.file>");
 		print("Options:");
-		print("  -d      ignore UTRs in BASE");
+		print("  -a      ignore UTRs in BASE");
 		print("  -1      only evaluate the first alignment of each query");
 		print("  -c      only consider alignments to contig /^(chr)?([0-9]+|X|Y)$/");
 		print("  -f      skip the first exon in TEST");
@@ -416,6 +430,11 @@ function gff_cmd_eval(args)
 		print("  -e      print error intervals");
 		return;
 	}
+
+	print("CC\tNN  nTest  nSingleton");
+	print("CC\tNE  nExon  nAnnoExon  ratio  nNovelExon");
+	print("CC\tNJ  nJunc  nAnnoJunc  ratio  nNovelJunc");
+	print("CC");
 
 	// load base annotation
 	let base = new BaseIndex();
@@ -431,7 +450,7 @@ function gff_cmd_eval(args)
 		last_tid = v.tid;
 		++n_test;
 		if (v.exon.length > 1) ++n_multi;
-		for (let i = 0; i < v.exon.length; ++i) {
+		for (let i = 0; i < v.exon.length; ++i) { // test exons
 			const st = v.exon[i].st, en = v.exon[i].en;
 			let found = 0, ov = base.ov_exon(v.ctg, st, en);
 			if (ov.length == 0) ++nov_exon;
@@ -440,8 +459,13 @@ function gff_cmd_eval(args)
 					++found;
 			++tot_exon;
 			if (found > 0) ++ann_exon;
+			if (print_all || (found == 0 && print_err)) {
+				const label = ov.length == 0? "EN" : found == 0? "EP" : "EC";
+				if (ov.length > 0) print(label, v.tid, i+1, v.ctg, st, en, gff_format_ov(ov));
+				else print(label, v.tid, i+1, v.ctg, st, en);
+			}
 		}
-		for (let i = 1; i < v.exon.length; ++i) {
+		for (let i = 1; i < v.exon.length; ++i) { // test junctions
 			const st = v.exon[i-1].en, en = v.exon[i].st;
 			let found = 0, ov = base.ov_junc(v.ctg, st, en);
 			if (ov.length == 0) ++nov_junc;
@@ -450,12 +474,13 @@ function gff_cmd_eval(args)
 					++found;
 			++tot_junc;
 			if (found > 0) ++ann_junc;
+			if (print_all || (found == 0 && print_err)) {
+				const label = ov.length == 0? "JN" : found == 0? "JP" : "JC";
+				if (ov.length > 0) print(label, v.tid, i, v.ctg, st, en, gff_format_ov(ov));
+				else print(label, v.tid, i, v.ctg, st, en);
+			}
 		}
 	}
-	print("CC\tNN  nTest  nSingleton");
-	print("CC\tNE  nExon  nAnnoExon  ratio  nNovelExon");
-	print("CC\tNJ  nJunc  nAnnoJunc  ratio  nNovelJunc");
-	print("CC");
 	print("NN", n_test, n_test - n_multi);
 	print("NE", tot_exon, ann_exon, (ann_exon / tot_exon).toFixed(4), nov_exon);
 	print("NJ", tot_junc, ann_junc, (ann_junc / tot_junc).toFixed(4), nov_junc);
