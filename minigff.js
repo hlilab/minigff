@@ -2,7 +2,7 @@
 
 "use strict";
 
-const gff_version = "r8";
+const gff_version = "r9";
 
 /*********************************
  * Command-line argument parsing *
@@ -186,9 +186,7 @@ class Transcript {
 		for (let i = 1; i < a.length; ++i)
 			if (a[i].st < a[i-1].en)
 				this.err |= 2;
-		if (this.cds_st < 0) this.cds_st = st;
-		if (this.cds_en < 0) this.cds_en = en;
-		if (this.cds_st < st || this.cds_en > en) this.err |= 4;
+		if ((this.cds_st >= 0 && this.cds_st < st) || (this.cds_en >= 0 && this.cds_en > en)) this.err |= 4;
 		this.disp_name = this.gname && this.type? [this.tid, this.type, this.gname].join("|") : this.tid;
 		if (this.err == 0) this.done = true;
 		if (!this.done) this.perror();
@@ -205,7 +203,8 @@ class Transcript {
 			lens.push(this.exon[i].en - this.exon[i].st);
 			offs.push(this.exon[i].st - this.st);
 		}
-		return [this.ctg, this.st, this.en, this.disp_name, this.score < 0? "." : this.score, this.strand, this.cds_st, this.cds_en, ".",
+		return [this.ctg, this.st, this.en, this.disp_name, this.score < 0? "." : this.score, this.strand,
+			this.cds_st < 0? "." : this.cds_st, this.cds_en < 0? "." : this.cds_en, ".",
 			this.exon.length, lens.join(",")+",", offs.join(",")+","];
 	}
 }
@@ -226,9 +225,12 @@ function* gff_read(fn, cds_only) {
 		if (fmt == 1) { // BED12
 			let t = line.split("\t");
 			if (t.length < 12) continue;
+			if (cds_only && (t[6] == "." || t[7] == ".")) continue;
 			v = new Transcript(t[3], t[0], t[5]);
-			v.st = parseInt(t[1]), v.en = parseInt(t[2]);
-			v.cds_st = parseInt(t[6]), v.cds_en = parseInt(t[7]);
+			v.st = parseInt(t[1]);
+			v.en = parseInt(t[2]);
+			v.cds_st = t[6] == "."? -1 : parseInt(t[6]);
+			v.cds_en = t[7] == "."? -1 : parseInt(t[7]);
 			const n_exon = parseInt(t[9]);
 			const lens = t[10].split(",", n_exon);
 			const offs = t[11].split(",", n_exon);
@@ -426,7 +428,7 @@ function gff_cmd_eval(args)
 	if (args.length < 2) {
 		print("Usage: minigff.js eval [options] <base.file> <test.file>");
 		print("Options:");
-		print("  -a      ignore UTRs in BASE (requiring GTF/GFF)");
+		print("  -a      ignore UTRs in BASE");
 		print("  -1      only evaluate the first alignment of each TEST");
 		print("  -c      only consider TEST alignments to contig /^(chr)?([0-9]+|X|Y)$/");
 		print("  -f      skip the first exon in TEST for exon evaluation");
