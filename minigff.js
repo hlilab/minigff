@@ -2,7 +2,7 @@
 
 "use strict";
 
-const gff_version = "r10";
+const gff_version = "r11";
 
 /*********************************
  * Command-line argument parsing *
@@ -187,7 +187,8 @@ class Transcript {
 			if (a[i].st < a[i-1].en)
 				this.err |= 2;
 		if ((this.cds_st >= 0 && this.cds_st < st) || (this.cds_en >= 0 && this.cds_en > en)) this.err |= 4;
-		this.disp_name = this.gname && this.type? [this.tid, this.type, this.gname].join("|") : this.tid;
+		if (!this.disp_name)
+			this.disp_name = this.gname && this.type? [this.tid, this.type, this.gname].join("|") : this.tid;
 		if (this.err == 0) this.done = true;
 		if (!this.done) this.perror();
 		return this.done;
@@ -209,11 +210,12 @@ class Transcript {
 	}
 }
 
-function* gff_read(fn, cds_only) {
+function* gff_read(fn, cds_only, disp_target_name) {
 	const re_fmt = /^(##PAF\t\S+(\t\d+){3}\t[+-])|^(\S+(\t\d+){3}\t[+-])|^(\S+\t\d+\t\d+\t\S+\t\S+\t[+-])|^((\S+\t){3}\d+\t\d+\t\S+\t[+-])|^(\S+\t\d+\t\S+\t\d+\t\d+\t(\d+[MIDNSH=X])+)/;
-	const re_gff = /\b(transcript_id|transcript_type|transcript_biotype|gene_name|gene_id|gbkey|tag)( "([^"]+)"|=([^;]+));/g;
+	const re_gff = /\b(transcript_id|transcript_type|transcript_biotype|gene_name|gene_id|gbkey|tag|Parent|Target)( "([^"]+)"|=([^;]+))/g;
 	const re_cigar = /(\d+)([MIDNSHP=XFGUV])/g;
 	if (typeof cds_only == "undefined") cds_only = false;
+	if (typeof disp_target_name == "undefined") disp_target_name = false;
 
 	function nt_cigar2exon(v, st, cigar) {
 		let m, x = st, x0 = st;
@@ -258,8 +260,8 @@ function* gff_read(fn, cds_only) {
 			v = null;
 		} else if (fmt == 2) { // GTF or GFF3
 			let t = line.split("\t");
-			if (t[2] != "exon" && t[2] != "CDS") continue;
-			let m, tid = null, gid = null, type = "", gname = null, biotype = "", ens_canonical = false;
+			if (t[2] != "exon" && t[2] != "CDS" && t[2] != "cds") continue;
+			let m, tid = null, gid = null, type = "", gname = null, biotype = "", ens_canonical = false, pid = null, target = null;
 			while ((m = re_gff.exec(t[8])) != null) {
 				const key = m[1], val = m[3]? m[3] : m[4];
 				if (key == "transcript_id") tid = val;
@@ -267,8 +269,11 @@ function* gff_read(fn, cds_only) {
 				else if (key == "transcript_biotype" || key == "gbkey") biotype = val;
 				else if (key == "gene_name") gname = val;
 				else if (key == "gene_id") gid = val;
+				else if (key == "Parent") pid = val;
 				else if (key == "tag" && val == "Ensembl_canonical") ens_canonical = true;
+				else if (key == "Target") target = val.split(" ")[0];
 			}
+			if (tid == null) tid = pid;
 			if (tid == null) continue;
 			if (gname == null) gname = gid? gid : "*"; // infer gene name
 			if (gid == null) gid = gname; // if gene_id missing, use gene name to identify a gene
@@ -278,9 +283,11 @@ function* gff_read(fn, cds_only) {
 				v = new Transcript(tid, t[0], t[6]);
 				v.type = type, v.gid = gid, v.gname = gname;
 			}
+			if (disp_target_name && target != null)
+				v.disp_name = target;
 			const st = parseInt(t[3]) - 1;
 			const en = parseInt(t[4]);
-			if (t[2] === "CDS") {
+			if (t[2] === "CDS" || t[2] === "cds") {
 				v.cds_st = v.cds_st >= 0 && v.cds_st < st? v.cds_st : st;
 				v.cds_en = v.cds_en >= 0 && v.cds_en > en? v.cds_en : en;
 				if (cds_only) v.exon.push({ st:st, en:en });
@@ -371,17 +378,21 @@ function* gff_read(fn, cds_only) {
 
 function gff_cmd_all2bed(args)
 {
-	let pri_only = false;
-	for (const o of getopt(args, "p", [])) {
+	let pri_only = false, cds_only = false, disp_target_name = false;
+	for (const o of getopt(args, "apt", [])) {
 		if (o.opt == "-p") pri_only = true;
+		else if (o.opt == "-a") cds_only = true;
+		else if (o.opt == "-t") disp_target_name = true;
 	}
 	if (args.length == 0) {
 		print("Usage: minigff.js all2bed [options] <in.file>");
 		print("Options:");
+		print("  -a       only process CDS");
 		print("  -p       only include primary alignments");
+		print("  -t       display Target name");
 		return;
 	}
-	for (let v of gff_read(args[0])) {
+	for (let v of gff_read(args[0], cds_only, disp_target_name)) {
 		if (pri_only && !v.pri) continue;
 		print(v.bed().join("\t"));
 	}
