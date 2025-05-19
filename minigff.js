@@ -360,7 +360,7 @@ function* gff_read(fn, cds_only) {
 			const flag = parseInt(t[1]);
 			v = new Transcript(t[0], t[2], flag&16? "-" : "+");
 			v.score = score;
-			v.pri = flag&0x100? true : false;
+			v.pri = flag&0x100? false : true;
 			nt_cigar2exon(v, parseInt(t[3]) - 1, t[5]);
 			if (v.finish()) yield v;
 			v = null;
@@ -371,13 +371,18 @@ function* gff_read(fn, cds_only) {
 
 function gff_cmd_all2bed(args)
 {
-	for (const o of getopt(args, "", [])) {
+	let pri_only = false;
+	for (const o of getopt(args, "p", [])) {
+		if (o.opt == "-p") pri_only = true;
 	}
 	if (args.length == 0) {
-		print("Usage: minigff.js all2bed <in.file>");
+		print("Usage: minigff.js all2bed [options] <in.file>");
+		print("Options:");
+		print("  -p       only include primary alignments");
 		return;
 	}
 	for (let v of gff_read(args[0])) {
+		if (pri_only && !v.pri) continue;
 		print(v.bed().join("\t"));
 	}
 }
@@ -423,17 +428,6 @@ class BaseIndex {
 	}
 }
 
-function gff_format_ov(ov)
-{
-	let x = '[';
-	for (let j = 0; j < ov.length; ++j) {
-		if (j) x += ', ';
-		x += `(${ov[j].st},${ov[j].en})`
-	}
-	x += ']';
-	return x;
-}
-
 function gff_cmd_eval(args)
 {
 	let print_all = false, print_err = false, first_only = false, chr_only = false, skip_last = false, skip_first = false, cds_only = false, eval_base = false;
@@ -459,6 +453,16 @@ function gff_cmd_eval(args)
 		print("  -e      print error intervals");
 		print("  -p      print all intervals");
 		return;
+	}
+
+	function gff_format_ov(ov) {
+		let x = '[';
+		for (let j = 0; j < ov.length; ++j) {
+			if (j) x += ', ';
+			x += `(${ov[j].st},${ov[j].en})`
+		}
+		x += ']';
+		return x;
 	}
 
 	print("CC\tNN  nTest  nSingleton");
@@ -590,7 +594,7 @@ function main(args)
 		print("Usage: minigff.js <command> [arguments]");
 		print("Commands:");
 		print("  all2bed        convert BED12/GFF/GTF/PAF/SAM to BED12");
-		print("  eval           evaluate agaist reference annotations");
+		print("  eval           evaluate against reference annotations");
 		print("  version        print version number");
 		exit(1);
 	}
