@@ -2,7 +2,7 @@
 
 "use strict";
 
-const gff_version = "r6";
+const gff_version = "r7";
 
 /*********************************
  * Command-line argument parsing *
@@ -423,8 +423,8 @@ function gff_cmd_eval(args)
 		print("Usage: minigff.js eval [options] <base.file> <test.file>");
 		print("Options:");
 		print("  -a      ignore UTRs in BASE");
-		print("  -1      only evaluate the first alignment of each query");
-		print("  -c      only consider alignments to contig /^(chr)?([0-9]+|X|Y)$/");
+		print("  -1      only evaluate the first alignment of each TEST");
+		print("  -c      only consider TEST alignments to contig /^(chr)?([0-9]+|X|Y)$/");
 		print("  -f      skip the first exon in TEST");
 		print("  -t      skip the last exon in TEST");
 		print("  -e      print error intervals");
@@ -450,7 +450,15 @@ function gff_cmd_eval(args)
 		last_tid = v.tid;
 		++n_test;
 		if (v.exon.length > 1) ++n_multi;
-		for (let i = 0; i < v.exon.length; ++i) { // test exons
+		let i_st = 0, i_en = v.exon.length;
+		if (v.strand == "+") {
+			if (skip_first) ++i_st;
+			if (skip_last)  --i_en;
+		} else if (v.strand == "-") {
+			if (skip_first) --i_en;
+			if (skip_last)  ++i_st;
+		}
+		for (let i = i_st; i < i_en; ++i) { // test exons
 			const st = v.exon[i].st, en = v.exon[i].en;
 			let found = 0, ov = base.ov_exon(v.ctg, st, en);
 			if (ov.length == 0) ++nov_exon;
