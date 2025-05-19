@@ -2,7 +2,7 @@
 
 "use strict";
 
-const gff_version = "r11";
+const gff_version = "r12";
 
 /*********************************
  * Command-line argument parsing *
@@ -378,23 +378,30 @@ function* gff_read(fn, cds_only, disp_target_name) {
 
 function gff_cmd_all2bed(args)
 {
-	let pri_only = false, cds_only = false, disp_target_name = false;
-	for (const o of getopt(args, "apt", [])) {
+	let pri_only = false, cds_only = false, disp_target_name = false, print_junc = false;
+	for (const o of getopt(args, "aptj", [])) {
 		if (o.opt == "-p") pri_only = true;
 		else if (o.opt == "-a") cds_only = true;
 		else if (o.opt == "-t") disp_target_name = true;
+		else if (o.opt == "-j") print_junc = true;
 	}
 	if (args.length == 0) {
 		print("Usage: minigff.js all2bed [options] <in.file>");
 		print("Options:");
 		print("  -a       only process CDS");
 		print("  -p       only include primary alignments");
+		print("  -j       print junctions/introns");
 		print("  -t       display Target name");
 		return;
 	}
 	for (let v of gff_read(args[0], cds_only, disp_target_name)) {
 		if (pri_only && !v.pri) continue;
-		print(v.bed().join("\t"));
+		if (print_junc) {
+			for (let i = 1; i < v.exon.length; ++i)
+				print(v.ctg, v.exon[i-1].en, v.exon[i].st, ".", ".", v.strand);
+		} else {
+			print(v.bed().join("\t"));
+		}
 	}
 }
 
