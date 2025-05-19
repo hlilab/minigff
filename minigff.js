@@ -2,7 +2,7 @@
 
 "use strict";
 
-const gff_version = "r7";
+const gff_version = "r8";
 
 /*********************************
  * Command-line argument parsing *
@@ -175,6 +175,7 @@ class Transcript {
 		this.exon = [];
 	}
 	finish() {
+		if (this.exon.length == 0) return false;
 		const a = this.exon.sort(function(a,b) {return a.st - b.st});
 		this.exon = a;
 		const st = a[0].st;
@@ -209,10 +210,11 @@ class Transcript {
 	}
 }
 
-function* gff_read(fn) {
+function* gff_read(fn, cds_only) {
 	const re_fmt = /^(##PAF\t\S+(\t\d+){3}\t[+-])|^(\S+(\t\d+){3}\t[+-])|^(\S+\t\d+\t\d+\t\S+\t\S+\t[+-])|^((\S+\t){3}\d+\t\d+\t\S+\t[+-])/;
 	const re_gff = /\b(transcript_id|transcript_type|transcript_biotype|gene_name|gene_id|gbkey|tag)( "([^"]+)"|=([^;]+));/g;
 	const re_cigar = /(\d+)([MIDNSHP=XFGUV])/g;
+	if (typeof cds_only == "undefined") cds_only = false;
 	let v = null, fmt0 = -1;
 	for (const line of k8_readline(fn)) {
 		let m;
@@ -263,7 +265,8 @@ function* gff_read(fn) {
 			if (t[2] === "CDS") {
 				v.cds_st = v.cds_st >= 0 && v.cds_st < st? v.cds_st : st;
 				v.cds_en = v.cds_en >= 0 && v.cds_en > en? v.cds_en : en;
-			} else if (t[2] === "exon") {
+				if (cds_only) v.exon.push({ st:st, en:en });
+			} else if (t[2] === "exon" && !cds_only) {
 				v.exon.push({ st:st, en:en });
 			}
 		} else if (fmt == 3 || fmt == 4) { // PAF
@@ -409,25 +412,28 @@ function gff_format_ov(ov)
 
 function gff_cmd_eval(args)
 {
-	let print_all = false, print_err = false, first_only = false, chr_only = false, skip_last = false, skip_first = false, cds_only = false;
-	for (const o of getopt(args, "e1ctfdap", [])) {
+	let print_all = false, print_err = false, first_only = false, chr_only = false, skip_last = false, skip_first = false, cds_only = false, eval_base = false;
+	for (const o of getopt(args, "e1ctfdaps", [])) {
 		if (o.opt == "-e") print_err = true;
 		else if (o.opt == "-p") print_all = true;
 		else if (o.opt == "-1") first_only = true;
 		else if (o.opt == "-c") chr_only = true;
 		else if (o.opt == "-f") skip_first = true;
 		else if (o.opt == "-t") skip_first = skip_last = true;
+		else if (o.opt == "-s") eval_base = true;
 		else if (o.opt == "-d" || o.opt == "-a") cds_only = true;
 	}
 	if (args.length < 2) {
 		print("Usage: minigff.js eval [options] <base.file> <test.file>");
 		print("Options:");
-		print("  -a      ignore UTRs in BASE");
+		print("  -a      ignore UTRs in BASE (requiring GTF/GFF)");
 		print("  -1      only evaluate the first alignment of each TEST");
 		print("  -c      only consider TEST alignments to contig /^(chr)?([0-9]+|X|Y)$/");
-		print("  -f      skip the first exon in TEST");
-		print("  -t      skip the last exon in TEST");
+		print("  -f      skip the first exon in TEST for exon evaluation");
+		print("  -t      skip the last exon in TEST for exon evaluation");
+		print("  -s      evaluate base Sn and Sp (more memory)");
 		print("  -e      print error intervals");
+		print("  -p      print all intervals");
 		return;
 	}
 
@@ -438,18 +444,20 @@ function gff_cmd_eval(args)
 
 	// load base annotation
 	let base = new BaseIndex();
-	for (let v of gff_read(args[0]))
+	for (let v of gff_read(args[0], cds_only))
 		base.add(v, cds_only);
 	base.index();
 
 	// evaluate test annotation
 	let last_tid = null, tot_exon = 0, ann_exon = 0, nov_exon = 0, tot_junc = 0, ann_junc = 0, nov_junc = 0, n_multi = 0, n_test = 0;
+	let qexon = {};
 	for (let v of gff_read(args[1])) {
 		if (chr_only && !/^(chr)?([0-9]+|X|Y)$/.test(v.ctg)) continue;
 		if (first_only && last_tid == v.tid) continue;
 		last_tid = v.tid;
 		++n_test;
 		if (v.exon.length > 1) ++n_multi;
+		// skip first/last exon if requested
 		let i_st = 0, i_en = v.exon.length;
 		if (v.strand == "+") {
 			if (skip_first) ++i_st;
@@ -467,6 +475,10 @@ function gff_cmd_eval(args)
 					++found;
 			++tot_exon;
 			if (found > 0) ++ann_exon;
+			if (eval_base) {
+				if (qexon[v.ctg] == null) qexon[v.ctg] = [];
+				qexon[v.ctg].push({ st:st, en:en });
+			}
 			if (print_all || (found == 0 && print_err)) {
 				const label = ov.length == 0? "EN" : found == 0? "EP" : "EC";
 				if (ov.length > 0) print(label, v.tid, i+1, v.ctg, st, en, gff_format_ov(ov));
@@ -492,6 +504,56 @@ function gff_cmd_eval(args)
 	print("NN", n_test, n_test - n_multi);
 	print("NE", tot_exon, ann_exon, (ann_exon / tot_exon).toFixed(4), nov_exon);
 	print("NJ", tot_junc, ann_junc, (ann_junc / tot_junc).toFixed(4), nov_junc);
+
+	// compute base Sn/Sp
+	function merge_and_index(ex) {
+		for (const chr in ex) {
+			let a = [], e = iit_sort_dedup_copy(ex[chr]);
+			let st = e[0].st, en = e[0].en;
+			for (let i = 1; i < e.length; ++i) { // merge
+				if (e[i].st > en) {
+					a.push({ st:st, en:en });
+					st = e[i].st, en = e[i].en;
+				} else {
+					en = en > e[i].en? en : e[i].en;
+				}
+			}
+			a.push({ st:st, en:en });
+			iit_index(a);
+			ex[chr] = a;
+		}
+	}
+
+	function cal_sn(a0, a1) {
+		let tot = 0, cov = 0;
+		for (const chr in a1) {
+			let e0 = a0[chr], e1 = a1[chr];
+			for (let i = 0; i < e1.length; ++i)
+				tot += e1[i].en - e1[i].st;
+			if (e0 == null) continue;
+			for (let i = 0; i < e1.length; ++i) {
+				const o = iit_overlap(e0, e1[i].st, e1[i].en);
+				for (let j = 0; j < o.length; ++j) { // this only works when there are no overlaps between intervals
+					let st = e1[i].st > o[j].st? e1[i].st : o[j].st;
+					let en = e1[i].en < o[j].en? e1[i].en : o[j].en;
+					cov += en - st;
+				}
+			}
+		}
+		return [tot, cov];
+	}
+
+	if (eval_base) {
+		let bexon = {};
+		for (const ctg in base.ctg)
+			bexon[ctg] = base.ctg[ctg].exon;
+		merge_and_index(qexon);
+		merge_and_index(bexon);
+		const sn = cal_sn(qexon, bexon);
+		const sp = cal_sn(bexon, qexon);
+		print("BN", sn[0], sn[1], (sn[1] / sn[0]).toFixed(4));
+		print("BP", sp[0], sp[1], (sp[1] / sp[0]).toFixed(4));
+	}
 }
 
 /*****************
