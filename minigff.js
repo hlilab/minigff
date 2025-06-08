@@ -2,7 +2,7 @@
 
 "use strict";
 
-const gff_version = "r13";
+const gff_version = "r14";
 
 /*********************************
  * Command-line argument parsing *
@@ -162,21 +162,31 @@ function* k8_readline(fn) {
  * Format parsing *
  ******************/
 
+class Exon {
+	constructor(est, een) {
+		this.st = est, this.en = een;
+	}
+}
+
 class Transcript {
 	constructor(tid, ctg, strand) {
 		this.tid = tid, this.ctg = ctg, this.strand = strand;
 		this.st = this.en = this.cds_st = this.cds_en = -1;
-		this.disp_name = null;
+		this.disp_name = this.target_name = null;
 		this.type = null;
 		this.gid = null, this.gname = null;
 		this.pri = null;
 		this.score = -1;
 		this.err = 0, this.done = false;
 		this.exon = [];
+		this.gff_cds = []; // for GFF/GTF parsing only; don't use elsewhere!
 	}
-	finish() {
+	finish() { // FIXME: GTF and GFF3 are different on stop codon
+		if (this.exon.length == 0 && this.gff_cds.length != 0) // use CDS if exon is missing
+			this.exon = this.gff_cds;
+		this.gff_cds = []; // clear out
 		if (this.exon.length == 0) return false;
-		const a = this.exon.sort(function(a,b) {return a.st - b.st});
+		const a = this.exon.sort(function(a,b) {return a.st - b.st}); // sort by start
 		this.exon = a;
 		const st = a[0].st;
 		const en = a[a.length - 1].en;
@@ -185,13 +195,41 @@ class Transcript {
 		if (st != this.st || en != this.en) this.err |= 1;
 		for (let i = 1; i < a.length; ++i)
 			if (a[i].st < a[i-1].en)
-				this.err |= 2;
-		if ((this.cds_st >= 0 && this.cds_st < st) || (this.cds_en >= 0 && this.cds_en > en)) this.err |= 4;
+				this.err |= 2; // ERROR: overlapping exons
+		if ((this.cds_st >= 0 && this.cds_st < st) || (this.cds_en >= 0 && this.cds_en > en))
+			this.err |= 4; // ERROR: inconsistent cds_st/cds_en
 		if (!this.disp_name)
 			this.disp_name = this.gname && this.type? [this.tid, this.type, this.gname].join("|") : this.tid;
 		if (this.err == 0) this.done = true;
 		if (!this.done) this.perror();
 		return this.done;
+	}
+	has_cds() {
+		return this.cds_st >= 0 && this.cds_en > 0 && this.cds_en > this.cds_st? true : false;
+	}
+	cds_len() {
+		if (!this.has_cds()) return 0;
+		let len = 0;
+		for (let i = 0; i < this.exon.length; ++i) {
+			const e = this.exon[i];
+			let max_st = e.st > this.cds_st? e.st : this.cds_st;
+			let min_en = e.en < this.cds_en? e.en : this.cds_en;
+			if (max_st < min_en) len += min_en - max_st;
+		}
+		return len;
+	}
+	cut_to_cds() {
+		if (!this.has_cds()) return false;
+		let exon = [];
+		for (let i = 0; i < this.exon.length; ++i) {
+			const e = this.exon[i];
+			let max_st = e.st > this.cds_st? e.st : this.cds_st;
+			let min_en = e.en < this.cds_en? e.en : this.cds_en;
+			if (max_st < min_en) exon.push(new Exon(max_st, min_en));
+		}
+		this.st = this.cds_st, this.en = this.cds_en;
+		this.exon = exon;
+		return true;
 	}
 	perror() {
 		if (this.err & 1) warn(`ERROR: inconsistent transcript and exon coordinates for transcript ${this.tid}`);
@@ -210,12 +248,10 @@ class Transcript {
 	}
 }
 
-function* gff_read(fn, cds_only, disp_target_name) {
+function* gff_read(fn) {
 	const re_fmt = /^(##PAF\t\S+(\t\d+){3}\t[+-])|^(\S+(\t\d+){3}\t[+-])|^(\S+\t\d+\t\d+\t\S+\t\S+\t[+-])|^((\S+\t){3}\d+\t\d+\t\S+\t[+-])|^(\S+\t\d+\t\S+\t\d+\t\d+\t(\d+[MIDNSH=X])+)/;
 	const re_gff = /\b(transcript_id|transcript_type|transcript_biotype|gene_name|gene_id|gbkey|tag|Parent|Target)( "([^"]+)"|=([^;]+))/g;
 	const re_cigar = /(\d+)([MIDNSHP=XFGUV])/g;
-	if (typeof cds_only == "undefined") cds_only = false;
-	if (typeof disp_target_name == "undefined") disp_target_name = false;
 
 	function nt_cigar2exon(v, st, cigar) {
 		let m, x = st, x0 = st;
@@ -243,7 +279,6 @@ function* gff_read(fn, cds_only, disp_target_name) {
 		if (fmt == 1) { // BED12
 			let t = line.split("\t");
 			if (t.length < 12) continue;
-			if (cds_only && (t[6] == "." || t[7] == ".")) continue;
 			v = new Transcript(t[3], t[0], t[5]);
 			v.st = parseInt(t[1]);
 			v.en = parseInt(t[2]);
@@ -254,7 +289,7 @@ function* gff_read(fn, cds_only, disp_target_name) {
 			const offs = t[11].split(",", n_exon);
 			for (let i = 0; i < n_exon; ++i) {
 				const off = parseInt(offs[i]), len = parseInt(lens[i]);
-				v.exon.push({ st: v.st + off, en: v.st + off + len });
+				v.exon.push(new Exon(v.st + off, v.st + off + len));
 			}
 			if (v.finish()) yield v;
 			v = null;
@@ -281,18 +316,16 @@ function* gff_read(fn, cds_only, disp_target_name) {
 			if (v == null || v.tid != tid) {
 				if (v != null && v.finish()) yield v;
 				v = new Transcript(tid, t[0], t[6]);
-				v.type = type, v.gid = gid, v.gname = gname;
+				v.type = type, v.gid = gid, v.gname = gname, v.target_name = target;
 			}
-			if (disp_target_name && target != null)
-				v.disp_name = target;
 			const st = parseInt(t[3]) - 1;
 			const en = parseInt(t[4]);
 			if (t[2] === "CDS" || t[2] === "cds") {
 				v.cds_st = v.cds_st >= 0 && v.cds_st < st? v.cds_st : st;
 				v.cds_en = v.cds_en >= 0 && v.cds_en > en? v.cds_en : en;
-				if (cds_only) v.exon.push({ st:st, en:en });
-			} else if (t[2] === "exon" && !cds_only) {
-				v.exon.push({ st:st, en:en });
+				v.gff_cds.push(new Exon(st, en));
+			} else if (t[2] === "exon") {
+				v.exon.push(new Exon(st, en));
 			}
 		} else if (fmt == 3 || fmt == 4) { // PAF
 			let m, t = line.split("\t");
@@ -343,11 +376,11 @@ function* gff_read(fn, cds_only, disp_target_name) {
 				if (x != en - st) throw Error("inconsistent CIGAR");
 				if (t[4] == '+') {
 					for (let i = 0; i < e.length; ++i)
-						v.exon.push({ st: st + e[i][0], en: st + e[i][1] });
+						v.exon.push(new Exon(st + e[i][0], st + e[i][1]));
 				} else if (t[4] == '-') { // For protein-to-genome alignment, the coordinates are on the query strand. Need to flip them.
 					const glen = en - st;
 					for (let i = e.length - 1; i >= 0; --i)
-						v.exon.push({ st: st + (glen - e[i][1]), en: st + (glen - e[i][0]) });
+						v.exon.push(new Exon(st + (glen - e[i][1]), st + (glen - e[i][0])));
 				}
 			} else { // nucleotide PAF
 				let x = nt_cigar2exon(v, st, cigar);
@@ -389,15 +422,21 @@ function gff_cmd_all2bed(args)
 	if (args.length == 0) {
 		print("Usage: minigff.js all2bed [options] <in.file>");
 		print("Options:");
-		print("  -a       only process CDS");
+		print("  -a       CDS only");
 		print("  -p       only include primary alignments");
 		print("  -j       print junctions/introns");
 		print("  -s       print 3bp at splice sites");
 		print("  -t       display Target name");
 		return;
 	}
-	for (let v of gff_read(args[0], cds_only, disp_target_name)) {
+	for (let v of gff_read(args[0])) {
 		if (pri_only && !v.pri) continue;
+		if (cds_only) {
+			if (!v.has_cds()) continue;
+			v.cut_to_cds();
+		}
+		if (disp_target_name && v.target_name != null)
+			v.disp_name = v.target_name;
 		if (print_junc) {
 			for (let i = 1; i < v.exon.length; ++i)
 				print(v.ctg, v.exon[i-1].en, v.exon[i].st, ".", ".", v.strand);
@@ -426,21 +465,13 @@ class BaseIndex {
 	constructor() {
 		this.ctg = {};
 	}
-	add(v, cds_only) { // add a Transcript object
+	add(v) { // add a Transcript object
 		if (this.ctg[v.ctg] == null) this.ctg[v.ctg] = { exon:[], junc:[] };
-		let p = this.ctg[v.ctg], exon;
-		if (cds_only) {
-			exon = [];
-			for (let i = 0; i < v.exon.length; ++i) {
-				const st = v.cds_st > v.exon[i].st? v.cds_st : v.exon[i].st;
-				const en = v.cds_en < v.exon[i].en? v.cds_en : v.exon[i].en;
-				if (st < en) exon.push({ st:st, en:en });
-			}
-		} else exon = v.exon;
-		for (let i = 0; i < exon.length; ++i)
-			p.exon.push({ st:exon[i].st, en:exon[i].en });
-		for (let i = 1; i < exon.length; ++i)
-			p.junc.push({ st:exon[i-1].en, en:exon[i].st });
+		let p = this.ctg[v.ctg];
+		for (let i = 0; i < v.exon.length; ++i)
+			p.exon.push({ st:v.exon[i].st, en:v.exon[i].en });
+		for (let i = 1; i < v.exon.length; ++i)
+			p.junc.push({ st:v.exon[i-1].en, en:v.exon[i].st });
 	}
 	index() {
 		for (const name in this.ctg) {
@@ -475,7 +506,7 @@ function gff_cmd_eval(args)
 	if (args.length < 2) {
 		print("Usage: minigff.js eval [options] <base.file> <test.file>");
 		print("Options:");
-		print("  -a      ignore UTRs in BASE");
+		print("  -a      CDS only");
 		print("  -1      only evaluate the first alignment of each TEST");
 		print("  -c      only consider TEST alignments to contig /^(chr)?([0-9]+|X|Y)$/");
 		print("  -f      skip the first exon in TEST for exon evaluation");
@@ -503,8 +534,13 @@ function gff_cmd_eval(args)
 
 	// load base annotation
 	let base = new BaseIndex();
-	for (let v of gff_read(args[0], cds_only))
-		base.add(v, cds_only);
+	for (let v of gff_read(args[0])) {
+		if (cds_only) {
+			if (!v.has_cds()) continue;
+			v.cut_to_cds();
+		}
+		base.add(v);
+	}
 	base.index();
 
 	// evaluate test annotation
