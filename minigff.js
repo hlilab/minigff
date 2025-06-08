@@ -2,7 +2,7 @@
 
 "use strict";
 
-const gff_version = "r15";
+const gff_version = "r16";
 
 /*********************************
  * Command-line argument parsing *
@@ -542,15 +542,15 @@ class BaseIndex {
 
 function gff_cmd_eval(args)
 {
-	let print_all = false, print_err = false, first_only = false, chr_only = false, skip_last = false, skip_first = false, cds_only = false, eval_base = false;
-	for (const o of getopt(args, "e1ctfdaps", [])) {
+	let print_all = false, print_err = false, first_only = false, chr_only = false, skip_last = false, skip_first = false, cds_only = false, eval_base = true;
+	for (const o of getopt(args, "e1ctfdapB", [])) {
 		if (o.opt == "-e") print_err = true;
 		else if (o.opt == "-p") print_all = true;
 		else if (o.opt == "-1") first_only = true;
 		else if (o.opt == "-c") chr_only = true;
 		else if (o.opt == "-f") skip_first = true;
 		else if (o.opt == "-t") skip_first = skip_last = true;
-		else if (o.opt == "-s") eval_base = true;
+		else if (o.opt == "-B") eval_base = false;
 		else if (o.opt == "-d" || o.opt == "-a") cds_only = true;
 	}
 	if (args.length < 2) {
@@ -561,7 +561,7 @@ function gff_cmd_eval(args)
 		print("  -c      only consider TEST alignments to contig /^(chr)?([0-9]+|X|Y)$/");
 		print("  -f      skip the first exon in TEST for exon evaluation");
 		print("  -t      skip the last exon in TEST for exon evaluation");
-		print("  -s      evaluate base Sn and Sp (more memory)");
+		print("  -B      skip base evaluation (less memory)");
 		print("  -e      print error intervals");
 		print("  -p      print all intervals");
 		return;
@@ -580,6 +580,8 @@ function gff_cmd_eval(args)
 	print("CC\tNN  nTest  nSingleton");
 	print("CC\tNE  nExon  nAnnoExon  ratio  nNovelExon");
 	print("CC\tNJ  nJunc  nAnnoJunc  ratio  nNovelJunc");
+	print("CC\tBN  nAnnoBase  nJointBase  sensitivity");
+	print("CC\tBP  nAlnBase   nJointBase  specificity");
 	print("CC");
 
 	// load base annotation
