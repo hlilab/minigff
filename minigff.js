@@ -2,7 +2,7 @@
 
 "use strict";
 
-const gff_version = "r19";
+const gff_version = "r20";
 
 /*********************************
  * Command-line argument parsing *
@@ -542,6 +542,7 @@ class BaseIndex {
 
 function gff_cmd_eval(args)
 {
+	const re_chr = /^(chr)?(\d{1,3}|[XYZW]|\d{1,3}[A-Z]|[IVX]+)$/;
 	let print_all = false, print_err = false, first_only = false, chr_only = false, skip_last = false, skip_first = false, cds_only = false, eval_base = true;
 	for (const o of getopt(args, "e1ctfdapB", [])) {
 		if (o.opt == "-e") print_err = true;
@@ -558,7 +559,7 @@ function gff_cmd_eval(args)
 		print("Options:");
 		print("  -a      CDS only");
 		print("  -1      only evaluate the first alignment of each TEST");
-		print("  -c      only consider TEST alignments to contig /^(chr)?([0-9]+|X|Y|[0-9]+[A-Z])$/");
+		print("  -c      only consider contigs matching /^(chr)?([0-9]{1,3}|[XYZW]|[0-9]{1,3}[A-Z])$/");
 		print("  -f      skip the first exon in TEST for exon evaluation");
 		print("  -t      skip the last exon in TEST for exon evaluation");
 		print("  -B      skip base evaluation (less memory)");
@@ -587,6 +588,7 @@ function gff_cmd_eval(args)
 	// load base annotation
 	let base = new BaseIndex();
 	for (let v of gff_read(args[0])) {
+		if (chr_only && !re_chr.test(v.ctg)) continue;
 		if (cds_only) {
 			if (!v.has_cds()) continue;
 			v.cut_to_cds();
@@ -599,7 +601,7 @@ function gff_cmd_eval(args)
 	let last_tid = null, tot_exon = 0, ann_exon = 0, nov_exon = 0, tot_junc = 0, ann_junc = 0, nov_junc = 0, n_multi = 0, n_test = 0;
 	let qexon = {};
 	for (let v of gff_read(args[1])) {
-		if (chr_only && !/^(chr)?(\d+|X|Y|\d+[A-Z])$/.test(v.ctg)) continue;
+		if (chr_only && !re_chr.test(v.ctg)) continue;
 		if (first_only && last_tid == v.tid) continue;
 		last_tid = v.tid;
 		++n_test;
