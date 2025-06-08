@@ -23,9 +23,8 @@ minigff is a script that parses gene annotation formats (GTF, GFF3 and BED12)
 and spliced alignment formats (SAM and PAF), extracts information and compares
 transcript structures. It seamlessly reads multiple formats, though for
 GTF/GFF3, transcripts are required to be grouped by genes. minigff is writen in
-a dialect of Javascript and depends the [k8][k8] Javascript engine. Precompiled
-k8 binaries can downloaded [from zenodo][k8-dl] or installed [via
-bioconda][k8-bc].
+a dialect of Javascript and depends on the [k8][k8] Javascript engine. Precompiled
+k8 binaries can downloaded [from zenodo][k8-dl] or installed [via bioconda][k8-bc].
 
 minigff grew out of my needs for processing and evaluating spliced alignment.
 It unifies and *deprecates* `gff2bed.js` in [minisplice][msp] and the
