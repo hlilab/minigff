@@ -2,7 +2,7 @@
 
 "use strict";
 
-const gff_version = "r14";
+const gff_version = "r15";
 
 /*********************************
  * Command-line argument parsing *
@@ -176,6 +176,7 @@ class Transcript {
 		this.type = null;
 		this.gid = null, this.gname = null;
 		this.pri = null;
+		this.gff_flag = 0; // 1=MANE_Select, 2=Ensembl_canonical, 4=GENCODE_Primary, 8=readthrough_transcript
 		this.score = -1;
 		this.err = 0, this.done = false;
 		this.exon = [];
@@ -216,6 +217,12 @@ class Transcript {
 			let min_en = e.en < this.cds_en? e.en : this.cds_en;
 			if (max_st < min_en) len += min_en - max_st;
 		}
+		return len;
+	}
+	trans_len() {
+		let len = 0;
+		for (let i = 0; i < this.exon.length; ++i)
+			len += this.exon[i].en - this.exon[i].st;
 		return len;
 	}
 	cut_to_cds() {
@@ -296,7 +303,7 @@ function* gff_read(fn) {
 		} else if (fmt == 2) { // GTF or GFF3
 			let t = line.split("\t");
 			if (t[2] != "exon" && t[2] != "CDS" && t[2] != "cds") continue;
-			let m, tid = null, gid = null, type = "", gname = null, biotype = "", ens_canonical = false, pid = null, target = null;
+			let m, tid = null, gid = null, type = "", gname = null, biotype = "", gff_flag = 0, pid = null, target = null;
 			while ((m = re_gff.exec(t[8])) != null) {
 				const key = m[1], val = m[3]? m[3] : m[4];
 				if (key == "transcript_id") tid = val;
@@ -305,8 +312,13 @@ function* gff_read(fn) {
 				else if (key == "gene_name") gname = val;
 				else if (key == "gene_id") gid = val;
 				else if (key == "Parent") pid = val;
-				else if (key == "tag" && val == "Ensembl_canonical") ens_canonical = true;
 				else if (key == "Target") target = val.split(" ")[0];
+				else if (key == "tag") {
+					if (val == "MANE_Select") gff_flag |= 1;
+					else if (val == "Ensembl_canonical") gff_flag |= 2;
+					else if (val == "GENCODE_Primary") gff_flag |= 4;
+					else if (val == "readthrough_transcript") gff_flag |= 8;
+				}
 			}
 			if (tid == null) tid = pid;
 			if (tid == null) continue;
@@ -316,7 +328,7 @@ function* gff_read(fn) {
 			if (v == null || v.tid != tid) {
 				if (v != null && v.finish()) yield v;
 				v = new Transcript(tid, t[0], t[6]);
-				v.type = type, v.gid = gid, v.gname = gname, v.target_name = target;
+				v.type = type, v.gid = gid, v.gname = gname, v.target_name = target, v.gff_flag = gff_flag;
 			}
 			const st = parseInt(t[3]) - 1;
 			const en = parseInt(t[4]);
@@ -409,28 +421,66 @@ function* gff_read(fn) {
 	if (v != null && v.finish()) yield v;
 }
 
+function gff_select(g) // priority: MANE_select > Ensembl_canonical > GENCODE_Primary > longest_CDS > longest_transcript
+{
+	if (g.length == 1) return g[0];
+	let a = [];
+	for (let i = 0; i < g.length; ++i)
+		a.push({ v:g[i], cds_len: g[i].cds_len(), trans_len: g[i].trans_len() });
+	a = a.sort(function(x,y) { return x.cds_len != y.cds_len? x.cds_len - y.cds_len : x.trans_len - y.trans_len; });
+	let sel_mane = null, sel_ens = null, sel_pri = null;
+	for (let i = 0; i < a.length; ++i) {
+		if (a[i].v.gff_flag & 1) sel_mane = a[i].v;
+		if (a[i].v.gff_flag & 2) sel_ens = a[i].v;
+		if (a[i].v.gff_flag & 4) sel_pri = a[i].v;
+	}
+	if (sel_mane) return sel_mane;
+	else if (sel_ens) return sel_ens;
+	else if (sel_pri) return sel_pri;
+	else return a[0].v;
+}
+
+function* gff_read_select(fn)
+{
+	let g = [];
+	for (let v of gff_read(fn)) {
+		if (g.length > 0 && g[0].gid != v.gid) {
+			yield gff_select(g);
+			g = [];
+		}
+		g.push(v);
+	}
+	if (g.length > 0)
+		yield gff_select(g);
+}
+
 function gff_cmd_all2bed(args)
 {
-	let pri_only = false, cds_only = false, disp_target_name = false, print_junc = false, print_ss = false;
-	for (const o of getopt(args, "aptjs", [])) {
+	let pri_only = false, cds_only = false, disp_target_name = false, print_junc = false, print_ss = false, select1 = false, no_through = false;
+	for (const o of getopt(args, "aptjs1r", [])) {
 		if (o.opt == "-p") pri_only = true;
 		else if (o.opt == "-a") cds_only = true;
 		else if (o.opt == "-t") disp_target_name = true;
 		else if (o.opt == "-j") print_junc = true;
 		else if (o.opt == "-s") print_ss = true;
+		else if (o.opt == "-1") select1 = true;
+		else if (o.opt == "-r") no_through = true;
 	}
 	if (args.length == 0) {
 		print("Usage: minigff.js all2bed [options] <in.file>");
 		print("Options:");
 		print("  -a       CDS only");
+		print("  -1       one transcript per gene if transcripts are clustered by gene");
 		print("  -p       only include primary alignments");
 		print("  -j       print junctions/introns");
 		print("  -s       print 3bp at splice sites");
-		print("  -t       display Target name");
+		print("  -t       display Target name in BED");
 		return;
 	}
-	for (let v of gff_read(args[0])) {
+	let reader = select1? gff_read_select : gff_read;
+	for (let v of reader(args[0])) {
 		if (pri_only && !v.pri) continue;
+		if (no_through && (v.gff_flag&8)) continue;
 		if (cds_only) {
 			if (!v.has_cds()) continue;
 			v.cut_to_cds();
