@@ -2,7 +2,7 @@
 
 "use strict";
 
-const gff_version = "r20";
+const gff_version = "r21";
 
 /*********************************
  * Command-line argument parsing *
@@ -139,6 +139,58 @@ function iit_overlap(a, st, en) {
 	}
 	return b;
 }
+
+/****************
+ * FASTX reader *
+ ****************/
+
+class Fastx {
+	constructor(fn) {
+		this._file = new File(fn);
+		this._last = 0;
+		this._line = new Bytes();
+		this._finished = false;
+		this.s = new Bytes();
+		this.q = new Bytes();
+		this.n = new Bytes();
+		this.c = new Bytes();
+	}
+	read() {
+		var c, f = this._file, line = this._line;
+		if (this._last == 0) { // then jump to the next header line
+			while ((c = f.read()) != -1 && c != 62 && c != 64);
+			if (c == -1) return -1; // end of file
+			this._last = c;
+		} // else: the first header char has been read in the previous call
+		this.c.length = this.s.length = this.q.length = 0;
+		if ((c = f.readline(this.n, 0)) < 0) return -1; // normal exit: EOF
+		if (c != 10) f.readline(this.c); // read FASTA/Q comment
+		if (this.s.capacity == 0) this.s.capacity = 256;
+		while ((c = f.read()) != -1 && c != 62 && c != 43 && c != 64) {
+			if (c == 10) continue; // skip empty lines
+			this.s.set(c);
+			f.readline(this.s, 2, this.s.length); // read the rest of the line
+		}
+		if (c == 62 || c == 64) this._last = c; // the first header char has been read
+		if (c != 43) return this.s.length; // FASTA
+		this.q.capacity = this.s.capacity;
+		c = f.readline(this._line); // skip the rest of '+' line
+		if (c < 0) return -2; // error: no quality string
+		var size = this.s.length;
+		while (f.readline(this.q, 2, this.q.length) >= 0 && this.q.length < size);
+		f._last = 0; // we have not come to the next header line
+		if (this.q.length != size) return -2; // error: qual string is of a different length
+		return size;
+	}
+	close() {
+		this._file.close();
+		this.s.destroy();
+		this.q.destroy();
+		this.n.destroy();
+		this.c.destroy();
+	}
+}
+
 
 /********************
  * Simpler File I/O *
@@ -470,7 +522,7 @@ function gff_cmd_all2bed(args)
 		print("Usage: minigff.js all2bed [options] <in.file>");
 		print("Options:");
 		print("  -a       CDS only");
-		print("  -1       one transcript per gene if transcripts are clustered by gene");
+		print("  -1       one transcript per gene (GFF; only if clustered by gene)");
 		print("  -p       only include primary alignments");
 		print("  -j       print junctions/introns");
 		print("  -s       print 3bp at splice sites");
@@ -705,6 +757,55 @@ function gff_cmd_eval(args)
 	}
 }
 
+/*********************
+ * Extract sequences *
+ *********************/
+
+function gff_cmd_getseq(args)
+{
+	let cds_only = false, select1 = false;
+	for (const o of getopt(args, "a1", [])) {
+		if (o.opt == "-a") cds_only = true;
+		else if (o.opt == "-1") select1 = true;
+	}
+	if (args.length < 2) {
+		print("Usage: minigff.js getseq [options] <anno.bed> <seq.fa>");
+		print("Options:");
+		print("  -a      only extract CDS");
+		print("  -1      one transcript per gene (GFF; only if clustered by gene)");
+		return 1;
+	}
+	let reader = select1? gff_read_select : gff_read;
+	let bed = {};
+	for (let v of reader(args[0])) {
+		if (cds_only) {
+			if (!v.has_cds()) continue;
+			v.cut_to_cds();
+		}
+		if (bed[v.ctg] == null) bed[v.ctg] = [];
+		bed[v.ctg].push(v);
+	}
+	let len, fx = new Fastx(args[1]);
+	let buf = new Bytes();
+	while ((len = fx.read()) >= 0) {
+		const seq = new Uint8Array(fx.s.buffer);
+		const ctg = fx.n.toString();
+		if (bed[ctg] == null) continue;
+		const v = bed[ctg];
+		for (let i = 0; i < v.length; ++i) {
+			buf.length = 0;
+			for (let j = 0; j < v[i].exon.length; ++j)
+				buf.set(seq.slice(v[i].exon[j].st, v[i].exon[j].en).buffer);
+			if (v[i].strand == "-") k8_revcomp(buf);
+			const disp_name = v[i].disp_name? v[i].disp_name : v[i].tid;
+			print(`>${disp_name}`);
+			print(buf);
+		}
+	}
+	buf.destroy();
+	fx.close();
+}
+
 /*****************
  * Main function *
  *****************/
@@ -716,6 +817,7 @@ function main(args)
 		print("Commands:");
 		print("  all2bed        convert BED12/GFF/GTF/PAF/SAM to BED12");
 		print("  eval           evaluate against reference annotations");
+		print("  getseq         extract transcript sequences");
 		print("  version        print version number");
 		exit(1);
 	}
@@ -723,6 +825,7 @@ function main(args)
 	var cmd = args.shift();
 	if (cmd == "all2bed") gff_cmd_all2bed(args);
 	else if (cmd == "eval") gff_cmd_eval(args);
+	else if (cmd == "getseq") gff_cmd_getseq(args);
 	else if (cmd == "version") {
 		print(gff_version);
 	} else throw Error("unrecognized command: " + cmd);
