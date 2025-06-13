@@ -2,7 +2,7 @@
 
 "use strict";
 
-const gff_version = "r22";
+const gff_version = "r23";
 
 /*********************************
  * Command-line argument parsing *
@@ -234,7 +234,21 @@ class Transcript {
 		this.exon = [];
 		this.gff_cds = []; // for GFF/GTF parsing only; don't use elsewhere!
 	}
+	#update_gff_cds() {
+		if (this.gff_cds.length == 0) return; // no CDS
+		this.gff_cds = this.gff_cds.sort(function(a,b) {return a.st - b.st});
+		const e0 = this.gff_cds[0];
+		const e1 = this.gff_cds[this.gff_cds.length - 1];
+		if (this.strand == "+") {
+			this.cds_st = e0.phase < 0? e0.st : e0.st + e0.phase;
+			this.cds_en = e1.phase < 0? e1.en : e1.st + e1.phase + Math.floor((e1.en - (e1.st + e1.phase)) / 3) * 3;
+		} else {
+			this.cds_st = e0.phase < 0? e0.st : e0.en - e0.phase - Math.floor(((e0.en - e0.phase) - e0.st) / 3) * 3;
+			this.cds_en = e1.phase < 0? e1.en : e1.en - e1.phase;
+		}
+	}
 	finish() { // FIXME: GTF and GFF3 are different on stop codon
+		this.#update_gff_cds();
 		if (this.exon.length == 0 && this.gff_cds.length != 0) // use CDS if exon is missing
 			this.exon = this.gff_cds;
 		this.gff_cds = []; // clear out
@@ -385,9 +399,8 @@ function* gff_read(fn) {
 			const st = parseInt(t[3]) - 1;
 			const en = parseInt(t[4]);
 			if (t[2] === "CDS" || t[2] === "cds") {
-				v.cds_st = v.cds_st >= 0 && v.cds_st < st? v.cds_st : st;
-				v.cds_en = v.cds_en >= 0 && v.cds_en > en? v.cds_en : en;
-				v.gff_cds.push(new Exon(st, en));
+				const phase = /^\d+$/.test(t[7])? parseInt(t[7]) % 3 : -1;
+				v.gff_cds.push({ st:st, en:en, phase:phase });
 			} else if (t[2] === "exon") {
 				v.exon.push(new Exon(st, en));
 			}
@@ -835,26 +848,24 @@ function gff_cmd_getseq(args)
 				const s = new Uint8Array(buf.buffer);
 				let n_stop = 0;
 				if (s.length % 3 != 0)
-					warn(`Warning: length of ${disp_name} CDS is not a multiple of 3`);
-				if (!skip_flawed_aa || s.length % 3 == 0) {
-					let aa_seq = new Bytes(Math.floor((buf.length + 2) / 3));
-					let aa_arr = new Uint8Array(aa_seq.buffer);
-					for (let j = 0; j < aa_seq.length; ++j) {
-						const c1 = nt4_table[s[j*3]], c2 = nt4_table[s[j*3+1]], c3 = nt4_table[s[j*3+2]];
-						const codon = c1 < 4 && c2 < 4 && c3 < 4? (c1<<4|c2<<2|c3) : 64;
-						const aa = codon2aa_table[codon];
-						if (aa == stop_code) {
-							if (j == aa_seq.length - 1) // if the last codon is a stop codon, ignore it
-								break;
-							++n_stop;
-						}
-						aa_arr[j] = aa;
+					warn(`Warning: ${disp_name} - CDS length is not a multiple of 3; continue anyway`);
+				let aa_seq = new Bytes(Math.floor((buf.length + 2) / 3));
+				let aa_arr = new Uint8Array(aa_seq.buffer);
+				for (let j = 0; j < aa_seq.length; ++j) {
+					const c1 = nt4_table[s[j*3]], c2 = nt4_table[s[j*3+1]], c3 = nt4_table[s[j*3+2]];
+					const codon = c1 < 4 && c2 < 4 && c3 < 4? (c1<<4|c2<<2|c3) : 64;
+					const aa = codon2aa_table[codon];
+					if (aa == stop_code) {
+						if (j == aa_seq.length - 1) // if the last codon is a stop codon, ignore it
+							break;
+						++n_stop;
 					}
-					if (n_stop > 0) warn(`Warning: ${disp_name} contains ${n_stop} stop codons`);
-					if (!skip_flawed_aa || n_stop == 0)
-						gff_print_fasta(disp_name, aa_seq, line_len);
-					aa_seq.destroy();
+					aa_arr[j] = aa;
 				}
+				if (n_stop > 0) warn(`Warning: ${disp_name} contains ${n_stop} stop codon(s)`);
+				if (!skip_flawed_aa || n_stop == 0)
+					gff_print_fasta(disp_name, aa_seq, line_len);
+				aa_seq.destroy();
 			} else { // print nucleotide sequence
 				gff_print_fasta(disp_name, buf, line_len);
 			}
