@@ -2,7 +2,7 @@
 
 "use strict";
 
-const gff_version = "r23";
+const gff_version = "r24";
 
 /*********************************
  * Command-line argument parsing *
@@ -234,7 +234,7 @@ class Transcript {
 		this.exon = [];
 		this.gff_cds = []; // for GFF/GTF parsing only; don't use elsewhere!
 	}
-	#update_gff_cds() {
+	#update_gff_cds() { // compute cds_st and cds_en
 		if (this.gff_cds.length == 0) return; // no CDS
 		this.gff_cds = this.gff_cds.sort(function(a,b) {return a.st - b.st});
 		const e0 = this.gff_cds[0];
@@ -242,7 +242,7 @@ class Transcript {
 		if (this.strand == "+") {
 			this.cds_st = e0.phase < 0? e0.st : e0.st + e0.phase;
 			this.cds_en = e1.phase < 0? e1.en : e1.st + e1.phase + Math.floor((e1.en - (e1.st + e1.phase)) / 3) * 3;
-		} else {
+		} else if (this.strand == "-") {
 			this.cds_st = e0.phase < 0? e0.st : e0.en - e0.phase - Math.floor(((e0.en - e0.phase) - e0.st) / 3) * 3;
 			this.cds_en = e1.phase < 0? e1.en : e1.en - e1.phase;
 		}
