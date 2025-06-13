@@ -2,7 +2,7 @@
 
 "use strict";
 
-const gff_version = "r24";
+const gff_version = "r25";
 
 /*********************************
  * Command-line argument parsing *
@@ -849,15 +849,17 @@ function gff_cmd_getseq(args)
 				let n_stop = 0;
 				if (s.length % 3 != 0)
 					warn(`Warning: ${disp_name} - CDS length is not a multiple of 3; continue anyway`);
-				let aa_seq = new Bytes(Math.floor((buf.length + 2) / 3));
+				let aa_seq = new Bytes(Math.floor(buf.length / 3));
 				let aa_arr = new Uint8Array(aa_seq.buffer);
 				for (let j = 0; j < aa_seq.length; ++j) {
 					const c1 = nt4_table[s[j*3]], c2 = nt4_table[s[j*3+1]], c3 = nt4_table[s[j*3+2]];
 					const codon = c1 < 4 && c2 < 4 && c3 < 4? (c1<<4|c2<<2|c3) : 64;
 					const aa = codon2aa_table[codon];
 					if (aa == stop_code) {
-						if (j == aa_seq.length - 1) // if the last codon is a stop codon, ignore it
+						if (j == aa_seq.length - 1) { // if the last codon is a stop codon, trim it
+							--aa_seq.length;
 							break;
+						}
 						++n_stop;
 					}
 					aa_arr[j] = aa;
