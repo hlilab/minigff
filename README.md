@@ -15,6 +15,12 @@ cp k8-1.2/k8-`uname -m`-`uname -s` $HOME/bin/k8  # assuming $HOME/bin in $PATH
 
 # evaluation
 ./minigff.js eval -a1 test/gc47.gtf.gz test/mp.paf.gz
+
+# extract sequences (no test case)
+./minigff.js getseq in.gtf genome.fa > mRNA.fa      # get transcript sequences
+./minigff.js getseq -a in.gtf genome.fa > cds.fa    # get CDS
+./minigff.js getseq -t in.gtf genome.fa > aa.fa     # translated protein sequences
+./minigff.js getseq -ft in.gtf genome.fa > aa.fa    # filter out in-frame stop codons
 ```
 
 ## Introduction
