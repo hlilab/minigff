@@ -2,7 +2,7 @@
 
 "use strict";
 
-const gff_version = "r21";
+const gff_version = "r22";
 
 /*********************************
  * Command-line argument parsing *
@@ -761,18 +761,36 @@ function gff_cmd_eval(args)
  * Extract sequences *
  *********************/
 
+function gff_print_fasta(name, seq, line_len)
+{
+	print(`>${name}`);
+	if (line_len <= 0) {
+		print(seq);
+	} else {
+		const s = seq.toString();
+		for (let i = 0; i < s.length; i += line_len)
+			print(s.substr(i, line_len));
+	}
+}
+
 function gff_cmd_getseq(args)
 {
-	let cds_only = false, select1 = false;
-	for (const o of getopt(args, "a1", [])) {
+	let cds_only = false, select1 = false, to_translate = false, line_len = 80, skip_flawed_aa = false;
+	for (const o of getopt(args, "a1tl:f", [])) {
 		if (o.opt == "-a") cds_only = true;
 		else if (o.opt == "-1") select1 = true;
+		else if (o.opt == "-t") cds_only = to_translate = true;
+		else if (o.opt == "-l") line_len = parseInt(o.arg);
+		else if (o.opt == "-f") skip_flawed_aa = true;
 	}
 	if (args.length < 2) {
 		print("Usage: minigff.js getseq [options] <anno.bed> <seq.fa>");
 		print("Options:");
 		print("  -a      only extract CDS");
 		print("  -1      one transcript per gene (GFF; only if clustered by gene)");
+		print("  -t      translate CDS (forcing -a)");
+		print("  -f      skip protein sequences with stop codons");
+		print(`  -l INT  line length [${line_len}]`);
 		return 1;
 	}
 	let reader = select1? gff_read_select : gff_read;
@@ -785,6 +803,21 @@ function gff_cmd_getseq(args)
 		if (bed[v.ctg] == null) bed[v.ctg] = [];
 		bed[v.ctg].push(v);
 	}
+
+	// prepare translation table
+	const codon2aa = "KNKNTTTTRSRSIIMIQHQHPPPPRRRRLLLLEDEDAAAAGGGGVVVV*Y*YSSSS*CWCLFLFX";
+	const stop_code = '*'.charCodeAt(0);
+	let codon2aa_table = new Uint8Array(new ArrayBuffer(65));
+	for (let i = 0; i <= 64; ++i)
+		codon2aa_table[i] = codon2aa.charCodeAt(i);
+
+	let nt4_table = new Uint8Array(new ArrayBuffer(256));
+	for (let i = 0; i < 256; ++i) nt4_table[i] = 4;
+	nt4_table['A'.charCodeAt(0)] = nt4_table['a'.charCodeAt(0)] = 0;
+	nt4_table['C'.charCodeAt(0)] = nt4_table['c'.charCodeAt(0)] = 1;
+	nt4_table['G'.charCodeAt(0)] = nt4_table['g'.charCodeAt(0)] = 2;
+	nt4_table['T'.charCodeAt(0)] = nt4_table['t'.charCodeAt(0)] = 3;
+
 	let len, fx = new Fastx(args[1]);
 	let buf = new Bytes();
 	while ((len = fx.read()) >= 0) {
@@ -798,8 +831,33 @@ function gff_cmd_getseq(args)
 				buf.set(seq.slice(v[i].exon[j].st, v[i].exon[j].en).buffer);
 			if (v[i].strand == "-") k8_revcomp(buf);
 			const disp_name = v[i].disp_name? v[i].disp_name : v[i].tid;
-			print(`>${disp_name}`);
-			print(buf);
+			if (to_translate) { // translate to protein sequence
+				const s = new Uint8Array(buf.buffer);
+				let n_stop = 0;
+				if (s.length % 3 != 0)
+					warn(`Warning: length of ${disp_name} CDS is not a multiple of 3`);
+				if (!skip_flawed_aa || s.length % 3 == 0) {
+					let aa_seq = new Bytes(Math.floor((buf.length + 2) / 3));
+					let aa_arr = new Uint8Array(aa_seq.buffer);
+					for (let j = 0; j < aa_seq.length; ++j) {
+						const c1 = nt4_table[s[j*3]], c2 = nt4_table[s[j*3+1]], c3 = nt4_table[s[j*3+2]];
+						const codon = c1 < 4 && c2 < 4 && c3 < 4? (c1<<4|c2<<2|c3) : 64;
+						const aa = codon2aa_table[codon];
+						if (aa == stop_code) {
+							if (j == aa_seq.length - 1) // if the last codon is a stop codon, ignore it
+								break;
+							++n_stop;
+						}
+						aa_arr[j] = aa;
+					}
+					if (n_stop > 0) warn(`Warning: ${disp_name} contains ${n_stop} stop codons`);
+					if (!skip_flawed_aa || n_stop == 0)
+						gff_print_fasta(disp_name, aa_seq, line_len);
+					aa_seq.destroy();
+				}
+			} else { // print nucleotide sequence
+				gff_print_fasta(disp_name, buf, line_len);
+			}
 		}
 	}
 	buf.destroy();
