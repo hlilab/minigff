@@ -2,7 +2,7 @@
 
 "use strict";
 
-const gff_version = "r25";
+const gff_version = "r27";
 
 /*********************************
  * Command-line argument parsing *
@@ -521,13 +521,14 @@ function* gff_read_select(fn)
 
 function gff_cmd_all2bed(args)
 {
-	let pri_only = false, cds_only = false, disp_target_name = false, print_junc = false, print_ss = false, select1 = false, no_through = false;
-	for (const o of getopt(args, "aptjs1r", [])) {
+	let pri_only = false, cds_only = false, disp_target_name = false, print_junc = false, print_ss = false, select1 = false, no_through = false, print_exon = false;
+	for (const o of getopt(args, "aptjs1re", [])) {
 		if (o.opt == "-p") pri_only = true;
 		else if (o.opt == "-a") cds_only = true;
 		else if (o.opt == "-t") disp_target_name = true;
 		else if (o.opt == "-j") print_junc = true;
 		else if (o.opt == "-s") print_ss = true;
+		else if (o.opt == "-e") print_exon = true;
 		else if (o.opt == "-1") select1 = true;
 		else if (o.opt == "-r") no_through = true;
 	}
@@ -537,6 +538,7 @@ function gff_cmd_all2bed(args)
 		print("  -a       CDS only");
 		print("  -1       one transcript per gene (GFF; only if clustered by gene)");
 		print("  -p       only include primary alignments");
+		print("  -e       print exons");
 		print("  -j       print junctions/introns");
 		print("  -s       print 3bp at splice sites");
 		print("  -t       display Target name in BED");
@@ -552,7 +554,10 @@ function gff_cmd_all2bed(args)
 		}
 		if (disp_target_name && v.target_name != null)
 			v.disp_name = v.target_name;
-		if (print_junc) {
+		if (print_exon) {
+			for (let i = 0; i < v.exon.length; ++i)
+				print(v.ctg, v.exon[i].st, v.exon[i].en, ".", ".", v.strand);
+		} else if (print_junc) {
 			for (let i = 1; i < v.exon.length; ++i)
 				print(v.ctg, v.exon[i-1].en, v.exon[i].st, ".", ".", v.strand);
 		} else if (print_ss) {
