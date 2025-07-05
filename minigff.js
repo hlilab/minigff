@@ -2,7 +2,7 @@
 
 "use strict";
 
-const gff_version = "r27";
+const gff_version = "r28";
 
 /*********************************
  * Command-line argument parsing *
@@ -231,6 +231,7 @@ class Transcript {
 		this.gff_flag = 0; // 1=MANE_Select, 2=Ensembl_canonical, 4=GENCODE_Primary, 8=readthrough_transcript
 		this.score = -1;
 		this.err = 0, this.done = false;
+		this.qjunc = null; // only for miniprot PAF output for now
 		this.exon = [];
 		this.gff_cds = []; // for GFF/GTF parsing only; don't use elsewhere!
 	}
@@ -431,21 +432,28 @@ function* gff_read(fn) {
 			if (score != null) v.score = score;
 			if (pri != null) v.pri = pri;
 			if (is_aa) { // amino acid PAF
-				let x = 0, x0 = 0, e = [];
+				let x = 0, x0 = 0, y3 = parseInt(t[2]) * 3, e = [], qjunc = [];
 				while ((m = re_cigar.exec(cigar)) != null) {
 					const len = parseInt(m[1]), op = m[2];
 					if (op == 'N') {
 						e.push([x0, x]);
+						qjunc.push(y3);
 						x0 = x + len, x += len;
 					} else if (op == 'U') {
 						e.push([x0, x + 1]);
-						x0 = x + len - 2, x += len;
+						qjunc.push(y3 + 1);
+						x0 = x + len - 2, x += len, y3 += 3;
 					} else if (op == 'V') {
 						e.push([x0, x + 2]);
-						x0 = x + len - 1, x += len;
-					} else if (op == 'M' || op == 'X' || op == '=' || op == 'D') {
+						qjunc.push(y3 + 2);
+						x0 = x + len - 1, x += len, y3 += 3;
+					} else if (op == 'M' || op == 'X' || op == '=') {
+						x += len * 3, y3 += len * 3;
+					} else if (op == 'D') {
 						x += len * 3;
-					} else if (op == 'F' || op == 'G') {
+					} else if (op == 'F') {
+						x += len, y3 += 3;
+					} else if (op == 'G') {
 						x += len;
 					}
 				}
@@ -458,7 +466,9 @@ function* gff_read(fn) {
 					const glen = en - st;
 					for (let i = e.length - 1; i >= 0; --i)
 						v.exon.push(new Exon(st + (glen - e[i][1]), st + (glen - e[i][0])));
+					qjunc.reverse();
 				}
+				v.qjunc = qjunc;
 			} else { // nucleotide PAF
 				let x = nt_cigar2exon(v, st, cigar);
 				if (x != en) throw Error("inconsistent CIGAR");
@@ -486,7 +496,7 @@ function* gff_read(fn) {
 	if (v != null && v.finish()) yield v;
 }
 
-function gff_select(g) // priority: MANE_select > Ensembl_canonical > GENCODE_Primary > longest_CDS > longest_transcript
+function gff_select_one(g) // priority: MANE_select > Ensembl_canonical > GENCODE_Primary > longest_CDS > longest_transcript
 {
 	if (g.length == 1) return g[0];
 	let a = [];
@@ -505,38 +515,53 @@ function gff_select(g) // priority: MANE_select > Ensembl_canonical > GENCODE_Pr
 	else return a[0].v;
 }
 
-function* gff_read_select(fn)
+function* gff_read_one(fn)
 {
 	let g = [];
 	for (let v of gff_read(fn)) {
 		if (g.length > 0 && g[0].gid != v.gid) {
-			yield gff_select(g);
+			yield gff_select_one(g);
 			g = [];
 		}
 		g.push(v);
 	}
 	if (g.length > 0)
-		yield gff_select(g);
+		yield gff_select_one(g);
+}
+
+function* gff_read_first(fn)
+{
+	let g = [];
+	for (let v of gff_read(fn)) {
+		if (g.length > 0 && g[0].tid != v.tid) {
+			yield g[0];
+			g = [];
+		}
+		g.push(v);
+	}
+	if (g.length > 0) yield g[0];
 }
 
 function gff_cmd_all2bed(args)
 {
-	let pri_only = false, cds_only = false, disp_target_name = false, print_junc = false, print_ss = false, select1 = false, no_through = false, print_exon = false;
-	for (const o of getopt(args, "aptjs1re", [])) {
+	let pri_only = false, cds_only = false, disp_target_name = false, print_junc = false, print_ss = false, select_one = false, no_through = false, print_exon = false, select_first = false;
+	for (const o of getopt(args, "aptjs1ref", [])) {
 		if (o.opt == "-p") pri_only = true;
 		else if (o.opt == "-a") cds_only = true;
 		else if (o.opt == "-t") disp_target_name = true;
 		else if (o.opt == "-j") print_junc = true;
 		else if (o.opt == "-s") print_ss = true;
 		else if (o.opt == "-e") print_exon = true;
-		else if (o.opt == "-1") select1 = true;
+		else if (o.opt == "-1") select_one = true;
 		else if (o.opt == "-r") no_through = true;
+		else if (o.opt == "-f") select_first = true;
 	}
 	if (args.length == 0) {
 		print("Usage: minigff.js all2bed [options] <in.file>");
 		print("Options:");
 		print("  -a       CDS only");
-		print("  -1       one transcript per gene (GFF; only if clustered by gene)");
+		print("  -1       select one transcript per gene (GFF; only if clustered by gene)");
+		print("  -f       select the first per query (for alignment)");
 		print("  -p       only include primary alignments");
 		print("  -e       print exons");
 		print("  -j       print junctions/introns");
@@ -544,7 +569,7 @@ function gff_cmd_all2bed(args)
 		print("  -t       display Target name in BED");
 		return;
 	}
-	let reader = select1? gff_read_select : gff_read;
+	let reader = select_one? gff_read_one : select_first? gff_read_first : gff_read;
 	for (let v of reader(args[0])) {
 		if (pri_only && !v.pri) continue;
 		if (no_through && (v.gff_flag&8)) continue;
@@ -558,8 +583,13 @@ function gff_cmd_all2bed(args)
 			for (let i = 0; i < v.exon.length; ++i)
 				print(v.ctg, v.exon[i].st, v.exon[i].en, ".", ".", v.strand);
 		} else if (print_junc) {
-			for (let i = 1; i < v.exon.length; ++i)
-				print(v.ctg, v.exon[i-1].en, v.exon[i].st, ".", ".", v.strand);
+			if (v.qjunc == null) {
+				for (let i = 1; i < v.exon.length; ++i)
+					print(v.ctg, v.exon[i-1].en, v.exon[i].st, v.tid, ".", v.strand);
+			} else {
+				for (let i = 1; i < v.exon.length; ++i)
+					print(v.ctg, v.exon[i-1].en, v.exon[i].st, v.tid, v.qjunc[i-1], v.strand);
+			}
 		} else if (print_ss) {
 			for (let i = 1; i < v.exon.length; ++i) {
 				const st = v.exon[i-1].en, en = v.exon[i].st;
@@ -811,7 +841,7 @@ function gff_cmd_getseq(args)
 		print(`  -l INT  line length [${line_len}]`);
 		return 1;
 	}
-	let reader = select1? gff_read_select : gff_read;
+	let reader = select1? gff_read_one : gff_read;
 	let bed = {};
 	for (let v of reader(args[0])) {
 		if (cds_only) {
