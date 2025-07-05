@@ -2,7 +2,7 @@
 
 "use strict";
 
-const gff_version = "r28";
+const gff_version = "r29";
 
 /*********************************
  * Command-line argument parsing *
@@ -529,19 +529,6 @@ function* gff_read_one(fn)
 		yield gff_select_one(g);
 }
 
-function* gff_read_first(fn)
-{
-	let g = [];
-	for (let v of gff_read(fn)) {
-		if (g.length > 0 && g[0].tid != v.tid) {
-			yield g[0];
-			g = [];
-		}
-		g.push(v);
-	}
-	if (g.length > 0) yield g[0];
-}
-
 function gff_cmd_all2bed(args)
 {
 	let pri_only = false, cds_only = false, disp_target_name = false, print_junc = false, print_ss = false, select_one = false, no_through = false, print_exon = false, select_first = false;
@@ -569,8 +556,11 @@ function gff_cmd_all2bed(args)
 		print("  -t       display Target name in BED");
 		return;
 	}
-	let reader = select_one? gff_read_one : select_first? gff_read_first : gff_read;
+	let reader = select_one? gff_read_one : gff_read;
+	let last_tid = null;
 	for (let v of reader(args[0])) {
+		if (select_first && v.tid == last_tid) continue;
+		last_tid = v.tid;
 		if (pri_only && !v.pri) continue;
 		if (no_through && (v.gff_flag&8)) continue;
 		if (cds_only) {
