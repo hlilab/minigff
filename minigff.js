@@ -2,7 +2,7 @@
 
 "use strict";
 
-const gff_version = "r29";
+const gff_version = "r30";
 
 /*********************************
  * Command-line argument parsing *
@@ -531,13 +531,14 @@ function* gff_read_one(fn)
 
 function gff_cmd_all2bed(args)
 {
-	let pri_only = false, cds_only = false, disp_target_name = false, print_junc = false, print_ss = false, select_one = false, no_through = false, print_exon = false, select_first = false;
-	for (const o of getopt(args, "aptjs1ref", [])) {
+	let pri_only = false, cds_only = false, disp_target_name = false, print_junc = false, select_one = false, no_through = false, print_exon = false, select_first = false;
+	let ss_len = 0;
+	for (const o of getopt(args, "aptjs:1ref", [])) {
 		if (o.opt == "-p") pri_only = true;
 		else if (o.opt == "-a") cds_only = true;
 		else if (o.opt == "-t") disp_target_name = true;
 		else if (o.opt == "-j") print_junc = true;
-		else if (o.opt == "-s") print_ss = true;
+		else if (o.opt == "-s") ss_len = parseInt(o.arg);
 		else if (o.opt == "-e") print_exon = true;
 		else if (o.opt == "-1") select_one = true;
 		else if (o.opt == "-r") no_through = true;
@@ -552,7 +553,7 @@ function gff_cmd_all2bed(args)
 		print("  -p       only include primary alignments");
 		print("  -e       print exons");
 		print("  -j       print junctions/introns");
-		print("  -s       print 3bp at splice sites");
+		print("  -s INT   print INT-bp at splice sites");
 		print("  -t       display Target name in BED");
 		return;
 	}
@@ -574,21 +575,28 @@ function gff_cmd_all2bed(args)
 				print(v.ctg, v.exon[i].st, v.exon[i].en, ".", ".", v.strand);
 		} else if (print_junc) {
 			if (v.qjunc == null) {
-				for (let i = 1; i < v.exon.length; ++i)
-					print(v.ctg, v.exon[i-1].en, v.exon[i].st, v.tid, ".", v.strand);
+				let tot_len = 0;
+				for (let i = 0; i < v.exon.length; ++i)
+					tot_len += v.exon[i].en - v.exon[i].st;
+				let off = v.exon[0].en - v.exon[0].st;
+				for (let i = 1; i < v.exon.length; ++i) {
+					let x = v.strand == '+'? off : tot_len - off;
+					print(v.ctg, v.exon[i-1].en, v.exon[i].st, v.tid, x, v.strand);
+					off += v.exon[i].en - v.exon[i].st;
+				}
 			} else {
 				for (let i = 1; i < v.exon.length; ++i)
 					print(v.ctg, v.exon[i-1].en, v.exon[i].st, v.tid, v.qjunc[i-1], v.strand);
 			}
-		} else if (print_ss) {
+		} else if (ss_len > 0) {
 			for (let i = 1; i < v.exon.length; ++i) {
 				const st = v.exon[i-1].en, en = v.exon[i].st;
 				if (v.strand == "+") {
-					print(v.ctg, st, st+3, "D", ".", "+");
-					print(v.ctg, en-3, en, "A", ".", "+");
+					print(v.ctg, st, st + ss_len, "D", ".", "+");
+					print(v.ctg, en - ss_len, en, "A", ".", "+");
 				} else if (v.strand == "-") {
-					print(v.ctg, en-3, en, "D", ".", "-");
-					print(v.ctg, st, st+3, "A", ".", "-");
+					print(v.ctg, en - ss_len, en, "D", ".", "-");
+					print(v.ctg, st, st + ss_len, "A", ".", "-");
 				}
 			}
 		} else {
