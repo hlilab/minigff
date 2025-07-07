@@ -2,7 +2,7 @@
 
 "use strict";
 
-const gff_version = "r30";
+const gff_version = "r31";
 
 /*********************************
  * Command-line argument parsing *
@@ -551,6 +551,7 @@ function gff_cmd_all2bed(args)
 		print("  -1       select one transcript per gene (GFF; only if clustered by gene)");
 		print("  -f       select the first per query (for alignment)");
 		print("  -p       only include primary alignments");
+		print("  -r       filter out read-through genes");
 		print("  -e       print exons");
 		print("  -j       print junctions/introns");
 		print("  -s INT   print INT-bp at splice sites");
@@ -819,6 +820,17 @@ function gff_print_fasta(name, seq, line_len)
 	}
 }
 
+function gff_gen_nt4_table()
+{
+	let nt4_table = new Uint8Array(new ArrayBuffer(256));
+	for (let i = 0; i < 256; ++i) nt4_table[i] = 4;
+	nt4_table['A'.charCodeAt(0)] = nt4_table['a'.charCodeAt(0)] = 0;
+	nt4_table['C'.charCodeAt(0)] = nt4_table['c'.charCodeAt(0)] = 1;
+	nt4_table['G'.charCodeAt(0)] = nt4_table['g'.charCodeAt(0)] = 2;
+	nt4_table['T'.charCodeAt(0)] = nt4_table['t'.charCodeAt(0)] = 3;
+	return nt4_table;
+}
+
 function gff_cmd_getseq(args)
 {
 	let cds_only = false, select1 = false, to_translate = false, line_len = 80, skip_flawed_aa = false;
@@ -856,13 +868,7 @@ function gff_cmd_getseq(args)
 	let codon2aa_table = new Uint8Array(new ArrayBuffer(65));
 	for (let i = 0; i <= 64; ++i)
 		codon2aa_table[i] = codon2aa.charCodeAt(i);
-
-	let nt4_table = new Uint8Array(new ArrayBuffer(256));
-	for (let i = 0; i < 256; ++i) nt4_table[i] = 4;
-	nt4_table['A'.charCodeAt(0)] = nt4_table['a'.charCodeAt(0)] = 0;
-	nt4_table['C'.charCodeAt(0)] = nt4_table['c'.charCodeAt(0)] = 1;
-	nt4_table['G'.charCodeAt(0)] = nt4_table['g'.charCodeAt(0)] = 2;
-	nt4_table['T'.charCodeAt(0)] = nt4_table['t'.charCodeAt(0)] = 3;
+	const nt4_table = gff_gen_nt4_table();
 
 	let len, fx = new Fastx(args[1]);
 	let buf = new Bytes();
@@ -910,6 +916,91 @@ function gff_cmd_getseq(args)
 	fx.close();
 }
 
+function gff_cmd_intron(args)
+{
+	let cds_only = false, select1 = false, len_intron = 5, trans_stat = false;
+	for (const o of getopt(args, "a1l:t", [])) {
+		if (o.opt == "-a") cds_only = true;
+		else if (o.opt == "-1") select1 = true;
+		else if (o.opt == "-t") trans_stat = true;
+		else if (o.opt == "-l") len_intron = parseInt(o.arg);
+	}
+	if (args.length < 2) {
+		print("Usage: minigff.js intron [options] <anno.bed> <seq.fa>");
+		print("Options:");
+		print("  -a      only extract CDS");
+		print("  -1      one transcript per gene (GFF; only if clustered by gene)");
+		print(`  -l INT  length of intron [${len_intron}]`);
+		print("  -t      transcript-level stats");
+		return 1;
+	}
+	let reader = select1? gff_read_one : gff_read;
+	let bed = {};
+	for (let v of reader(args[0])) {
+		if (cds_only) {
+			if (!v.has_cds()) continue;
+			v.cut_to_cds();
+		}
+		if (bed[v.ctg] == null) bed[v.ctg] = [];
+		bed[v.ctg].push(v);
+	}
+
+	const nt4_table = gff_gen_nt4_table();
+
+	let len, fx = new Fastx(args[1]);
+	let buf5 = new Bytes(), buf3 = new Bytes();
+	while ((len = fx.read()) >= 0) {
+		const seq = new Uint8Array(fx.s.buffer);
+		const ctg = fx.n.toString();
+		if (bed[ctg] == null) continue;
+		const v = bed[ctg];
+		for (let i = 0; i < v.length; ++i) {
+			if (trans_stat) {
+				let n_gc = 0, n_at = 0, n_n = 0;
+				for (let j = 1; j < v[i].exon.length; ++j) {
+					const st = v[i].exon[j-1].en, en = v[i].exon[j].st;
+					for (let k = st; k < en; ++k) {
+						const c = nt4_table[seq[k]];
+						if (c == 0 || c == 3) ++n_at;
+						else if (c == 1 || c == 2) ++n_gc;
+						else ++n_n;
+					}
+				}
+				if (v[i].exon.length > 1)
+					print(ctg, v[i].st, v[i].en, v[i].tid, '.', v[i].strand, n_at, n_gc);
+			} else {
+				let tot_len = 0;
+				for (let j = 0; j < v[i].exon.length; ++j)
+					tot_len += v[i].exon[j].en - v[i].exon[j].st;
+				let off = v[i].exon[0].en - v[i].exon[0].st;
+				for (let j = 1; j < v[i].exon.length; ++j) {
+					const st = v[i].exon[j-1].en, en = v[i].exon[j].st;
+					let n_gc = 0, n_at = 0, n_n = 0;
+					for (let k = st; k < en; ++k) {
+						const c = nt4_table[seq[k]];
+						if (c == 0 || c == 3) ++n_at;
+						else if (c == 1 || c == 2) ++n_gc;
+						else ++n_n;
+					}
+					buf5.length = 0; buf5.set(seq.slice(st, st + len_intron).buffer);
+					buf3.length = 0; buf3.set(seq.slice(en - len_intron, en).buffer);
+					let dseq, aseq;
+					if (v[i].strand == '-') {
+						k8_revcomp(buf5); k8_revcomp(buf3);
+						dseq = buf3.toString(), aseq = buf5.toString();
+					} else dseq = buf5.toString(), aseq = buf3.toString();
+					const x = v[i].strand == '+'? off : tot_len - off;
+					print(ctg, st, en, v[i].tid, x, v[i].strand, n_at, n_gc, dseq, aseq);
+					off += v[i].exon[j].en - v[i].exon[j].st;
+				}
+			}
+		}
+	}
+	buf5.destroy();
+	buf3.destroy();
+	fx.close();
+}
+
 /*****************
  * Main function *
  *****************/
@@ -922,6 +1013,7 @@ function main(args)
 		print("  all2bed        convert BED12/GFF/GTF/PAF/SAM to BED12");
 		print("  eval           evaluate against reference annotations");
 		print("  getseq         extract transcript sequences");
+		print("  intron         get intron stats");
 		print("  version        print version number");
 		exit(1);
 	}
@@ -930,6 +1022,7 @@ function main(args)
 	if (cmd == "all2bed") gff_cmd_all2bed(args);
 	else if (cmd == "eval") gff_cmd_eval(args);
 	else if (cmd == "getseq") gff_cmd_getseq(args);
+	else if (cmd == "intron") gff_cmd_intron(args);
 	else if (cmd == "version") {
 		print(gff_version);
 	} else throw Error("unrecognized command: " + cmd);
