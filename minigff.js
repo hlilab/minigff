@@ -2,7 +2,7 @@
 
 "use strict";
 
-const gff_version = "r31";
+const gff_version = "r32";
 
 /*********************************
  * Command-line argument parsing *
@@ -956,15 +956,19 @@ function gff_cmd_intron(args)
 		const v = bed[ctg];
 		for (let i = 0; i < v.length; ++i) {
 			if (trans_stat) {
-				let n_gc = 0, n_at = 0, n_n = 0;
+				let n_gc = 0, n_at = 0, n_cpg = 0, n_n = 0;
 				for (let j = 1; j < v[i].exon.length; ++j) {
 					const st = v[i].exon[j-1].en, en = v[i].exon[j].st;
+					let last_c = -1;
 					for (let k = st; k < en; ++k) {
 						const c = nt4_table[seq[k]];
 						if (c == 0 || c == 3) ++n_at;
 						else if (c == 1 || c == 2) ++n_gc;
 						else ++n_n;
+						if (last_c == 1 && c == 2) ++n_cpg;
+						last_c = c;
 					}
+					if (last_c == 1 && nt4_table[seq[en]] == 2) ++n_cpg;
 				}
 				if (v[i].exon.length > 1)
 					print(ctg, v[i].st, v[i].en, v[i].tid, '.', v[i].strand, n_at, n_gc);
@@ -975,13 +979,17 @@ function gff_cmd_intron(args)
 				let off = v[i].exon[0].en - v[i].exon[0].st;
 				for (let j = 1; j < v[i].exon.length; ++j) {
 					const st = v[i].exon[j-1].en, en = v[i].exon[j].st;
-					let n_gc = 0, n_at = 0, n_n = 0;
+					let n_gc = 0, n_at = 0, n_cpg = 0, n_n = 0;
+					let last_c = -1;
 					for (let k = st; k < en; ++k) {
 						const c = nt4_table[seq[k]];
 						if (c == 0 || c == 3) ++n_at;
 						else if (c == 1 || c == 2) ++n_gc;
 						else ++n_n;
+						if (last_c == 1 && c == 2) ++n_cpg;
+						last_c = c;
 					}
+					if (last_c == 1 && nt4_table[seq[en]] == 2) ++n_cpg;
 					buf5.length = 0; buf5.set(seq.slice(st, st + len_intron).buffer);
 					buf3.length = 0; buf3.set(seq.slice(en - len_intron, en).buffer);
 					let dseq, aseq;
