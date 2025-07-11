@@ -2,7 +2,7 @@
 
 "use strict";
 
-const gff_version = "r33";
+const gff_version = "r34";
 
 /*********************************
  * Command-line argument parsing *
@@ -1071,7 +1071,7 @@ function main(args)
 		print("  eval           evaluate against reference annotations");
 		print("  getseq         extract transcript sequences");
 		print("  intron         get intron stats");
-		print("  gc             analyze GC from 'intron' output");
+//		print("  gc             analyze GC from 'intron' output");
 		print("  version        print version number");
 		exit(1);
 	}
