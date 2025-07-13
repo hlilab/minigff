@@ -2,7 +2,7 @@
 
 "use strict";
 
-const gff_version = "r34";
+const gff_version = "r35";
 
 /*********************************
  * Command-line argument parsing *
@@ -918,19 +918,21 @@ function gff_cmd_getseq(args)
 
 function gff_cmd_intron(args)
 {
-	let cds_only = false, select1 = false, len_intron = 5, trans_stat = false;
-	for (const o of getopt(args, "a1l:t", [])) {
+	let cds_only = false, select1 = false, len_intron = 5, len_exon = 1, trans_stat = false;
+	for (const o of getopt(args, "a1l:e:t", [])) {
 		if (o.opt == "-a") cds_only = true;
 		else if (o.opt == "-1") select1 = true;
 		else if (o.opt == "-t") trans_stat = true;
 		else if (o.opt == "-l") len_intron = parseInt(o.arg);
+		else if (o.opt == "-e") len_exon = parseInt(o.arg);
 	}
 	if (args.length < 2) {
 		print("Usage: minigff.js intron [options] <anno.bed> <seq.fa>");
 		print("Options:");
 		print("  -a      only extract CDS");
 		print("  -1      one transcript per gene (GFF; only if clustered by gene)");
-		print(`  -l INT  length of intron [${len_intron}]`);
+		print(`  -l INT  number of intron bases [${len_intron}]`);
+		print(`  -e INT  number of exon bases [${len_exon}]`);
 		print("  -t      transcript-level stats");
 		return 1;
 	}
@@ -955,7 +957,7 @@ function gff_cmd_intron(args)
 		if (bed[ctg] == null) continue;
 		const v = bed[ctg];
 		for (let i = 0; i < v.length; ++i) {
-			if (trans_stat) {
+			if (trans_stat) { // whole-transcript statistics
 				let n_gc = 0, n_at = 0, n_cpg = 0, n_n = 0;
 				for (let j = 1; j < v[i].exon.length; ++j) {
 					const st = v[i].exon[j-1].en, en = v[i].exon[j].st;
@@ -971,8 +973,8 @@ function gff_cmd_intron(args)
 					if (last_c == 1 && nt4_table[seq[en]] == 2) ++n_cpg;
 				}
 				if (v[i].exon.length > 1)
-					print(ctg, v[i].st, v[i].en, v[i].tid, '.', v[i].strand, n_at, n_gc);
-			} else {
+					print(ctg, v[i].st, v[i].en, v[i].tid, '.', v[i].strand, '.', '.', n_at, n_gc);
+			} else { // intron statistics
 				let tot_len = 0;
 				for (let j = 0; j < v[i].exon.length; ++j)
 					tot_len += v[i].exon[j].en - v[i].exon[j].st;
@@ -989,16 +991,18 @@ function gff_cmd_intron(args)
 						if (last_c == 1 && c == 2) ++n_cpg;
 						last_c = c;
 					}
-					if (last_c == 1 && nt4_table[seq[en]] == 2) ++n_cpg;
-					buf5.length = 0; buf5.set(seq.slice(st, st + len_intron).buffer);
-					buf3.length = 0; buf3.set(seq.slice(en - len_intron, en).buffer);
-					let dseq, aseq;
-					if (v[i].strand == '-') {
-						k8_revcomp(buf5); k8_revcomp(buf3);
-						dseq = buf3.toString(), aseq = buf5.toString();
-					} else dseq = buf5.toString(), aseq = buf3.toString();
+					let dseq = ".", aseq = ".";
+					if (st >= len_exon && st + len_intron <= seq.length && en >= len_intron && en + len_exon <= seq.length) {
+						if (last_c == 1 && nt4_table[seq[en]] == 2) ++n_cpg;
+						buf5.length = 0; buf5.set(seq.slice(st - len_exon, st + len_intron).buffer);
+						buf3.length = 0; buf3.set(seq.slice(en - len_intron, en + len_exon).buffer);
+						if (v[i].strand == '-') {
+							k8_revcomp(buf5); k8_revcomp(buf3);
+							dseq = buf3.toString(), aseq = buf5.toString();
+						} else dseq = buf5.toString(), aseq = buf3.toString();
+					}
 					const x = v[i].strand == '+'? off : tot_len - off;
-					print(ctg, st, en, v[i].tid, x, v[i].strand, n_at, n_gc, dseq, aseq);
+					print(ctg, st, en, v[i].tid, x, v[i].strand, dseq.toUpperCase(), aseq.toUpperCase(), n_at, n_gc);
 					off += v[i].exon[j].en - v[i].exon[j].st;
 				}
 			}
