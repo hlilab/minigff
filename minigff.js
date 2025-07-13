@@ -2,7 +2,7 @@
 
 "use strict";
 
-const gff_version = "r36";
+const gff_version = "r37";
 
 /*********************************
  * Command-line argument parsing *
@@ -920,27 +920,31 @@ function gff_cmd_getseq(args)
 
 function gff_cmd_intron(args)
 {
-	let cds_only = false, select1 = false, len_intron = 5, len_exon = 1, trans_stat = false;
-	for (const o of getopt(args, "a1l:e:t", [])) {
+	let cds_only = false, select1 = false, len_intron = 5, len_exon = 1, trans_stat = false, select_first = false;
+	for (const o of getopt(args, "a1l:e:tf", [])) {
 		if (o.opt == "-a") cds_only = true;
 		else if (o.opt == "-1") select1 = true;
 		else if (o.opt == "-t") trans_stat = true;
 		else if (o.opt == "-l") len_intron = parseInt(o.arg);
 		else if (o.opt == "-e") len_exon = parseInt(o.arg);
+		else if (o.opt == "-f") select_first = true;
 	}
 	if (args.length < 2) {
 		print("Usage: minigff.js intron [options] <anno.bed> <seq.fa>");
 		print("Options:");
 		print("  -a      only extract CDS");
 		print("  -1      one transcript per gene (GFF; only if clustered by gene)");
+		print("  -f      select the first per query (for alignment)");
 		print(`  -l INT  number of intron bases [${len_intron}]`);
 		print(`  -e INT  number of exon bases [${len_exon}]`);
 		print("  -t      transcript-level stats");
 		return 1;
 	}
 	let reader = select1? gff_read_one : gff_read;
-	let bed = {};
+	let bed = {}, last_tid = null;
 	for (let v of reader(args[0])) {
+		if (select_first && v.tid == last_tid) continue;
+		last_tid = v.tid;
 		if (cds_only) {
 			if (!v.has_cds()) continue;
 			v.cut_to_cds();
@@ -1003,7 +1007,7 @@ function gff_cmd_intron(args)
 							dseq = buf3.toString(), aseq = buf5.toString();
 						} else dseq = buf5.toString(), aseq = buf3.toString();
 					}
-					const x = v[i].strand == '+'? off : tot_len - off;
+					const x = v[i].qjunc != null? v[i].qjunc[j-1] : v[i].strand == '+'? off : tot_len - off;
 					print(ctg, st, en, v[i].tid, x, v[i].strand, dseq.toUpperCase(), aseq.toUpperCase(), n_at, n_gc);
 					off += v[i].exon[j].en - v[i].exon[j].st;
 				}
