@@ -2,7 +2,7 @@
 
 "use strict";
 
-const gff_version = "r39";
+const gff_version = "r40";
 
 /*********************************
  * Command-line argument parsing *
@@ -1139,7 +1139,9 @@ function gff_cmd_icluster(args)
 				j0 = j;
 			}
 		}
-		warn(`Parsed file "${args[i]}"`);
+		gj.h = {};
+		if (typeof gc == "function") gc();
+		warn(`Parsed file "${args[i]}" (size=${pj.a.length})`);
 	}
 	pj.h = null, gj.h = null; // no longer needed
 
