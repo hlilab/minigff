@@ -2,7 +2,7 @@
 
 "use strict";
 
-const gff_version = "r40";
+const gff_version = "r41";
 
 /*********************************
  * Command-line argument parsing *
@@ -1032,18 +1032,18 @@ function gff_cmd_icluster(args)
 	}
 	class GJunc {
 		constructor(in_list) {
-			this.a = [], this.h = {};
+			this.a = [], this.h = new Map();
 			this.in_set = {};
 			for (const x of in_list.split(","))
 				this.in_set[x] = 1;
 		}
 		add_junc(key, dseq, aseq, n_at, n_gc) {
-			if (this.h[key] == null) {
-				this.h[key] = this.a.length;
+			if (!this.h.has(key)) {
+				this.h.set(key, this.a.length);
 				const is_in = this.in_set[key[0]]? 1 : 0;
 				this.a.push(new GJunc1(key, is_in, dseq, aseq, n_at, n_gc));
 			}
-			return this.h[key];
+			return this.h.get(key);
 		}
 		is_in(gid) {
 			return this.a[gid].is_in;
@@ -1062,14 +1062,14 @@ function gff_cmd_icluster(args)
 	}
 	class PJunc {
 		constructor() {
-			this.a = [], this.h = {};
+			this.a = [], this.h = new Map();
 		}
 		add_junc(key, gid, is_in) {
-			if (this.h[key] == null) {
-				this.h[key] = this.a.length;
+			if (!this.h.has(key)) {
+				this.h.set(key, this.a.length);
 				this.a.push(new PJunc1(key));
 			}
-			const pid = this.h[key];
+			const pid = this.h.get(key);
 			let x = this.a[pid];
 			x.gid.push(gid);
 			if (is_in) x.n_in++;
@@ -1139,7 +1139,7 @@ function gff_cmd_icluster(args)
 				j0 = j;
 			}
 		}
-		gj.h = {};
+		gj.h = new Map();
 		if (typeof gc == "function") gc();
 		warn(`Parsed file "${args[i]}" (size=${pj.a.length})`);
 	}
