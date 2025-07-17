@@ -2,7 +2,7 @@
 
 "use strict";
 
-const gff_version = "r38";
+const gff_version = "r39";
 
 /*********************************
  * Command-line argument parsing *
@@ -1019,6 +1019,176 @@ function gff_cmd_intron(args)
 	fx.close();
 }
 
+function gff_cmd_icluster(args)
+{
+	// genomic junctions
+	class GJunc1 {
+		constructor(key, is_in, dseq, aseq, n_at, n_gc) {
+			this.key = key;
+			this.is_in = is_in;
+			this.dseq = dseq, this.aseq = aseq;
+			this.n_at = n_at, this.n_gc = n_gc;
+		}
+	}
+	class GJunc {
+		constructor(in_list) {
+			this.a = [], this.h = {};
+			this.in_set = {};
+			for (const x of in_list.split(","))
+				this.in_set[x] = 1;
+		}
+		add_junc(key, dseq, aseq, n_at, n_gc) {
+			if (this.h[key] == null) {
+				this.h[key] = this.a.length;
+				const is_in = this.in_set[key[0]]? 1 : 0;
+				this.a.push(new GJunc1(key, is_in, dseq, aseq, n_at, n_gc));
+			}
+			return this.h[key];
+		}
+		is_in(gid) {
+			return this.a[gid].is_in;
+		}
+	}
+
+	// protein junctions
+	class PJunc1 {
+		constructor(key) {
+			this.key = key;
+			this.cid = -2; // not visited
+			this.n_in = 0, this.n_out = 0;
+			this.edge_in = {}, this.edge_out = {};
+			this.gid = [];
+		}
+	}
+	class PJunc {
+		constructor() {
+			this.a = [], this.h = {};
+		}
+		add_junc(key, gid, is_in) {
+			if (this.h[key] == null) {
+				this.h[key] = this.a.length;
+				this.a.push(new PJunc1(key));
+			}
+			const pid = this.h[key];
+			let x = this.a[pid];
+			x.gid.push(gid);
+			if (is_in) x.n_in++;
+			else x.n_out++;
+			return pid;
+		}
+		#add_edge1(is_in, pid1, pid2) {
+			let h = is_in? this.a[pid1].edge_in : this.a[pid1].edge_out;
+			if (h[pid2] == null) h[pid2] = 0;
+			++h[pid2];
+		}
+		add_edge(is_in, pid1, pid2) {
+			this.#add_edge1(is_in, pid1, pid2);
+			this.#add_edge1(is_in, pid2, pid1);
+		}
+		get_nei(pid) {
+			const p = this.a[pid];
+			let h = {};
+			if (p.n_in > 0) {
+				for (const x in p.edge_in)
+					h[x] = 1;
+			} else {
+				for (const x in p.edge_out) {
+					const pid2 = parseInt(x);
+					if (this.a[pid2].n_in == 0) // as long as there are in-group pj, don't merge
+						h[x] = 1;
+				}
+			}
+			let a = [];
+			for (const x in h)
+				a.push(parseInt(x));
+			return a;
+		}
+	}
+
+	// main functionality starts here
+	let in_list = "m,b,r";
+	for (const o of getopt(args, "", [])) {
+	}
+	if (args.length < 2) {
+		print("Usage: minigff icluster <in1.istat> <in2.istat> [...]");
+		return 1;
+	}
+
+	// parse input files
+	let gj = new GJunc(in_list);
+	let pj = new PJunc();
+	for (let i = 0; i < args.length; ++i) {
+		let a = [];
+		for (const line of k8_readline(args[i])) {
+			let t = line.split("\t");
+			const gkey = `${t[0]}\t${t[1]}\t${t[2]}\t${t[5]}`;
+			const pkey = `${t[3]}\t${t[4]}`;
+			const gid = gj.add_junc(gkey, t[6], t[7], parseInt(t[8]), parseInt(t[9]));
+			const pid = pj.add_junc(pkey, gid, gj.is_in(gid));
+			a.push({ gid:gid, pid:pid });
+		}
+		a.sort(function(x,y) { return x.gid - y.gid });
+		for (let j = 1, j0 = 0; j <= a.length; ++j) {
+			if (j == a.length || a[j].gid != a[j0].gid) {
+				if (j - j0 > 1) {
+					const is_in = gj.is_in(a[j0].gid);
+					for (let k = j0; k < j - 1; ++k) // quadratic!
+						for (let l = k + 1; l < j; ++l)
+							pj.add_edge(is_in, a[k].pid, a[l].pid);
+				}
+				j0 = j;
+			}
+		}
+		warn(`Parsed file "${args[i]}"`);
+	}
+	pj.h = null, gj.h = null; // no longer needed
+
+	// single-linkage clustering
+	let cid = 0;
+	for (let i = 0; i < pj.a.length; ++i) {
+		if (pj.a[i].cid >= 0) continue;
+		let queue = [i];
+		while (queue.length > 0) {
+			const pid = queue.shift();
+			pj.a[pid].cid = cid;
+			const nei = pj.get_nei(pid);
+			for (let j = 0; j < nei.length; ++j) {
+				if (pj.a[nei[j]].cid == -2) {
+					queue.push(nei[j]);
+					pj.a[nei[j]].cid = -1; // visited but final value unset
+				}
+			}
+		}
+		++cid;
+	}
+	warn(`Found ${cid} clusters`);
+
+	let cluster = [];
+	for (let i = 0; i < cid; ++i) cluster[i] = [];
+	for (let i = 0; i < pj.a.length; ++i)
+		cluster[pj.a[i].cid].push(i);
+	for (let i = 0; i < cid; ++i) {
+		let g = new Set(), a = [];
+		for (let j = 0; j < cluster[i].length; ++j) {
+			const x = pj.a[cluster[i][j]];
+			for (let k = 0; k < x.gid.length; ++k)
+				g.add(x.gid[k]);
+		}
+		for (const x of g) a.push(x);
+		a.sort((x, y) => x - y);
+		print("CL", i, cluster[i].length, a.length);
+		for (let j = 0; j < cluster[i].length; ++j) {
+			const x = pj.a[cluster[i][j]];
+			print("PJ", x.key, x.n_in, x.n_out);
+		}
+		for (let j = 0; j < a.length; ++j) {
+			const x = gj.a[a[j]];
+			print("GJ", x.key, x.dseq, x.aseq, x.n_at, x.n_gc);
+		}
+		print("//");
+	}
+}
+
 /*****************
  * Main function *
  *****************/
@@ -1041,7 +1211,7 @@ function main(args)
 	else if (cmd == "eval") gff_cmd_eval(args);
 	else if (cmd == "getseq") gff_cmd_getseq(args);
 	else if (cmd == "intron") gff_cmd_intron(args);
-	else if (cmd == "gc") gff_cmd_gc(args);
+	else if (cmd == "icluster") gff_cmd_icluster(args);
 	else if (cmd == "version") {
 		print(gff_version);
 	} else throw Error("unrecognized command: " + cmd);
