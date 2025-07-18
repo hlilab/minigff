@@ -2,7 +2,7 @@
 
 "use strict";
 
-const gff_version = "r47";
+const gff_version = "r48";
 
 /*********************************
  * Command-line argument parsing *
@@ -1023,10 +1023,7 @@ function gff_cmd_icluster(args)
 {
 	// genomic junctions
 	class GJunc1 {
-		constructor(key, info, is_in) {
-			this.key = new Bytes();
-			this.key.capacity = key.length + 1;
-			this.key.set(key);
+		constructor(info, is_in) {
 			this.info = new Bytes();
 			this.info.capacity = info.length + 1;
 			this.info.set(info);
@@ -1037,14 +1034,14 @@ function gff_cmd_icluster(args)
 		constructor(in_list) {
 			this.a = [], this.h = new Map();
 			this.in_set = {};
-			for (const x of in_list.split(","))
+			for (const x of in_list.split(""))
 				this.in_set[x] = 1;
 		}
 		add_junc(key, info) {
 			if (!this.h.has(key)) {
 				this.h.set(key, this.a.length);
 				const is_in = this.in_set[key[0]]? 1 : 0;
-				this.a.push(new GJunc1(key, info, is_in));
+				this.a.push(new GJunc1(`${key}\t${info}`, is_in));
 			}
 			return this.h.get(key);
 		}
@@ -1058,7 +1055,8 @@ function gff_cmd_icluster(args)
 		constructor(key) {
 			this.key = key;
 			this.cid = -2; // not visited
-			this.n_in = 0, this.n_out = 0;
+			this.n_in = 0;
+			this.n_out = 0;
 			this.flt = false;
 			this.edge_in = null;
 			this.edge_out = null;
@@ -1089,15 +1087,23 @@ function gff_cmd_icluster(args)
 			if (this.a[pid1].flt) return;
 			if (is_in) {
 				if (this.a[pid1].edge_in == null)
-					this.a[pid1].edge_in = new Set();
-				this.a[pid1].edge_in.add(pid2);
-				if (this.a[pid1].edge_in.size >= this.max_edge)
+					this.a[pid1].edge_in = new Map();
+				let h = this.a[pid1].edge_in;
+				if (h.has(pid2)) {
+					const c = h.get(pid2);
+					h.set(pid2, c + 1);
+				} else h.set(pid2, 1);
+				if (h.size >= this.max_edge)
 					this.a[pid1].flt = true;
 			} else {
 				if (this.a[pid1].edge_out == null)
-					this.a[pid1].edge_out = new Set();
-				this.a[pid1].edge_out.add(pid2);
-				if (this.a[pid1].edge_out.size >= this.max_edge)
+					this.a[pid1].edge_out = new Map();
+				let h = this.a[pid1].edge_out;
+				if (h.has(pid2)) {
+					const c = h.get(pid2);
+					h.set(pid2, c + 1);
+				} else h.set(pid2, 1);
+				if (h.size >= this.max_edge)
 					this.a[pid1].flt = true;
 			}
 		}
@@ -1105,19 +1111,23 @@ function gff_cmd_icluster(args)
 			this.#add_edge1(is_in, pid1, pid2);
 			this.#add_edge1(is_in, pid2, pid1);
 		}
-		get_nei(pid) {
+		get_nei(pid, min_share) {
 			const p = this.a[pid];
 			let h = new Set();
 			if (p.n_in > 0) {
 				if (p.edge_in != null)
-					for (const x of p.edge_in)
-						h.add(x);
+					for (const [pid2, v] of p.edge_in) {
+						const q = this.a[pid2];
+						if (v >= p.n_in * min_share || v >= q.n_in * min_share)
+							h.add(pid2);
+					}
 			} else {
 				if (p.edge_out != null) {
-					for (const x of p.edge_out) {
-						const pid2 = parseInt(x);
-						if (this.a[pid2].n_in == 0) // as long as there are in-group pj, don't merge
-							h.add(x);
+					for (const [pid2, v] of p.edge_out) {
+						const q = this.a[pid2];
+						if (q.n_in > 0) continue;
+						if (v >= p.n_out * min_share || v >= q.n_out * min_share)
+							h.add(pid2);
 					}
 				}
 			}
@@ -1129,13 +1139,20 @@ function gff_cmd_icluster(args)
 	}
 
 	// main functionality starts here
-	let in_list = "m,b,r", max_edge = 100, fn_excl = null;
-	for (const o of getopt(args, "x:e:", [])) {
+	let in_list = "mbr", max_edge = 100, min_share_frac = 0.2, fn_excl = null;
+	for (const o of getopt(args, "x:e:g:s:", [])) {
 		if (o.opt == "-x") fn_excl = o.arg;
 		else if (o.opt == "-e") max_edge = parseInt(o.arg);
+		else if (o.opt == "-g") in_list = o.arg;
+		else if (o.opt == "-s") min_share_frac = parseFloat(o.arg);
 	}
 	if (args.length < 2) {
-		print("Usage: minigff icluster <in1.istat> <in2.istat> [...]");
+		print("Usage: minigff icluster [options] <in1.istat> <in2.istat> [...]");
+		print("Options:");
+		print(`  -g STR      list of in-group prefix [${in_list}]`);
+		print(`  -e INT      drop a pjunc if it has >=INT edges [${max_edge}]`);
+		print(`  -s FLOAT    link two pjuncs if they share >=FLOAT fraction of gjuncs [${min_share_frac}]`);
+		print(`  -x FILE     exclude protein junctions in FILE []`);
 		return 1;
 	}
 	let pexcl = new Set();
@@ -1197,7 +1214,7 @@ function gff_cmd_icluster(args)
 		while (queue.length > 0) {
 			const pid = queue.shift();
 			pj.a[pid].cid = cid;
-			const nei = pj.get_nei(pid);
+			const nei = pj.get_nei(pid, min_share_frac);
 			for (let j = 0; j < nei.length; ++j) {
 				if (pj.a[nei[j]].cid == -2 && !pj.a[nei[j]].flt) {
 					queue.push(nei[j]);
@@ -1234,7 +1251,7 @@ function gff_cmd_icluster(args)
 		}
 		for (let j = 0; j < a.length; ++j) {
 			const x = gj[a[j].fid].a[a[j].gid];
-			print("GJ", x.key, x.info);
+			print("GJ", x.info);
 		}
 		print("//");
 	}
