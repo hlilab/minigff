@@ -2,7 +2,7 @@
 
 "use strict";
 
-const gff_version = "r43";
+const gff_version = "r44";
 
 /*********************************
  * Command-line argument parsing *
@@ -1056,8 +1056,8 @@ function gff_cmd_icluster(args)
 			this.key = key;
 			this.cid = -2; // not visited
 			this.n_in = 0, this.n_out = 0;
-			this.edge_in = new Set();
-			this.edge_out = new Set();
+			this.edge_in = null;
+			this.edge_out = null;
 			this.gid = new Bytes();
 		}
 	}
@@ -1081,8 +1081,15 @@ function gff_cmd_icluster(args)
 			return pid;
 		}
 		#add_edge1(is_in, pid1, pid2) {
-			if (is_in) this.a[pid1].edge_in.add(pid2);
-			else this.a[pid1].edge_out.add(pid2);
+			if (is_in) {
+				if (this.a[pid1].edge_in == null)
+					this.a[pid1].edge_in = new Set();
+				this.a[pid1].edge_in.add(pid2);
+			} else {
+				if (this.a[pid1].edge_out == null)
+					this.a[pid1].edge_out = new Set();
+				this.a[pid1].edge_out.add(pid2);
+			}
 		}
 		add_edge(is_in, pid1, pid2) {
 			this.#add_edge1(is_in, pid1, pid2);
@@ -1092,13 +1099,16 @@ function gff_cmd_icluster(args)
 			const p = this.a[pid];
 			let h = new Set();
 			if (p.n_in > 0) {
-				for (const x of p.edge_in)
-					h.add(x);
-			} else {
-				for (const x of p.edge_out) {
-					const pid2 = parseInt(x);
-					if (this.a[pid2].n_in == 0) // as long as there are in-group pj, don't merge
+				if (p.edge_in != null)
+					for (const x of p.edge_in)
 						h.add(x);
+			} else {
+				if (p.edge_out != null) {
+					for (const x of p.edge_out) {
+						const pid2 = parseInt(x);
+						if (this.a[pid2].n_in == 0) // as long as there are in-group pj, don't merge
+							h.add(x);
+					}
 				}
 			}
 			let a = [];
