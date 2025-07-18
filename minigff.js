@@ -2,7 +2,7 @@
 
 "use strict";
 
-const gff_version = "r44";
+const gff_version = "r45";
 
 /*********************************
  * Command-line argument parsing *
@@ -1023,11 +1023,12 @@ function gff_cmd_icluster(args)
 {
 	// genomic junctions
 	class GJunc1 {
-		constructor(key, is_in, dseq, aseq, n_at, n_gc) {
-			this.key = key;
+		constructor(key, info, is_in) {
+			this.key = new Bytes();
+			this.key.set(key);
+			this.info = new Bytes();
+			this.info.set(info);
 			this.is_in = is_in;
-			this.dseq = dseq, this.aseq = aseq;
-			this.n_at = n_at, this.n_gc = n_gc;
 		}
 	}
 	class GJunc {
@@ -1037,11 +1038,11 @@ function gff_cmd_icluster(args)
 			for (const x of in_list.split(","))
 				this.in_set[x] = 1;
 		}
-		add_junc(key, dseq, aseq, n_at, n_gc) {
+		add_junc(key, info) {
 			if (!this.h.has(key)) {
 				this.h.set(key, this.a.length);
 				const is_in = this.in_set[key[0]]? 1 : 0;
-				this.a.push(new GJunc1(key, is_in, dseq, aseq, n_at, n_gc));
+				this.a.push(new GJunc1(key, info, is_in));
 			}
 			return this.h.get(key);
 		}
@@ -1136,7 +1137,8 @@ function gff_cmd_icluster(args)
 			let t = line.split("\t");
 			const gkey = `${t[0]}\t${t[1]}\t${t[2]}\t${t[5]}`;
 			const pkey = `${t[3]}\t${t[4]}`;
-			const gid = gj.add_junc(gkey, t[6], t[7], parseInt(t[8]), parseInt(t[9]));
+			const ginfo = `${t[6]}\t${t[7]}\t${t[8]}\t${t[9]}`;
+			const gid = gj.add_junc(gkey, ginfo);
 			const pid = pj.add_junc(pkey, gid, gj.is_in(gid));
 			a.push({ gid:gid, pid:pid });
 		}
@@ -1199,7 +1201,7 @@ function gff_cmd_icluster(args)
 		}
 		for (let j = 0; j < a.length; ++j) {
 			const x = gj.a[a[j]];
-			print("GJ", x.key, x.dseq, x.aseq, x.n_at, x.n_gc);
+			print("GJ", x.key, x.info);
 		}
 		print("//");
 	}
