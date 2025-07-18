@@ -2,7 +2,7 @@
 
 "use strict";
 
-const gff_version = "r45";
+const gff_version = "r46";
 
 /*********************************
  * Command-line argument parsing *
@@ -1025,8 +1025,10 @@ function gff_cmd_icluster(args)
 	class GJunc1 {
 		constructor(key, info, is_in) {
 			this.key = new Bytes();
+			this.key.capacity = key.length + 1;
 			this.key.set(key);
 			this.info = new Bytes();
+			this.info.capacity = info.length + 1;
 			this.info.set(info);
 			this.is_in = is_in;
 		}
@@ -1065,17 +1067,17 @@ function gff_cmd_icluster(args)
 	class PJunc {
 		constructor() {
 			this.a = [], this.h = new Map();
-			this._buf = new ArrayBuffer(4);
+			this._buf = new ArrayBuffer(8);
 			this._view = new Uint32Array(this._buf);
 		}
-		add_junc(key, gid, is_in) {
+		add_junc(key, fid, gid, is_in) {
 			if (!this.h.has(key)) {
 				this.h.set(key, this.a.length);
 				this.a.push(new PJunc1(key));
 			}
 			const pid = this.h.get(key);
 			let x = this.a[pid];
-			this._view[0] = gid;
+			this._view[0] = fid, this._view[1] = gid;
 			x.gid.set(this._buf);
 			if (is_in) x.n_in++;
 			else x.n_out++;
@@ -1129,7 +1131,9 @@ function gff_cmd_icluster(args)
 	}
 
 	// parse input files
-	let gj = new GJunc(in_list);
+	let gj = [];
+	for (let i = 0; i < args.length; ++i)
+		gj[i] = new GJunc(in_list);
 	let pj = new PJunc();
 	for (let i = 0; i < args.length; ++i) {
 		let a = [];
@@ -1138,15 +1142,15 @@ function gff_cmd_icluster(args)
 			const gkey = `${t[0]}\t${t[1]}\t${t[2]}\t${t[5]}`;
 			const pkey = `${t[3]}\t${t[4]}`;
 			const ginfo = `${t[6]}\t${t[7]}\t${t[8]}\t${t[9]}`;
-			const gid = gj.add_junc(gkey, ginfo);
-			const pid = pj.add_junc(pkey, gid, gj.is_in(gid));
+			const gid = gj[i].add_junc(gkey, ginfo);
+			const pid = pj.add_junc(pkey, i, gid, gj[i].is_in(gid));
 			a.push({ gid:gid, pid:pid });
 		}
-		a.sort(function(x,y) { return x.gid - y.gid });
+		a.sort((x, y) => x.gid - y.gid);
 		for (let j = 1, j0 = 0; j <= a.length; ++j) {
 			if (j == a.length || a[j].gid != a[j0].gid) {
 				if (j - j0 > 1) {
-					const is_in = gj.is_in(a[j0].gid);
+					const is_in = gj[i].is_in(a[j0].gid);
 					for (let k = j0; k < j - 1; ++k) // quadratic!
 						for (let l = k + 1; l < j; ++l)
 							pj.add_edge(is_in, a[k].pid, a[l].pid);
@@ -1154,11 +1158,10 @@ function gff_cmd_icluster(args)
 				j0 = j;
 			}
 		}
-		gj.h = new Map();
+		gj[i].h = null;
 		if (typeof gc == "function") gc();
 		warn(`Parsed file "${args[i]}" (size=${pj.a.length})`);
 	}
-	pj.h = null, gj.h = null; // no longer needed
 
 	// single-linkage clustering
 	let cid = 0;
@@ -1189,18 +1192,21 @@ function gff_cmd_icluster(args)
 		for (let j = 0; j < cluster[i].length; ++j) {
 			const x = pj.a[cluster[i][j]];
 			const y = new Uint32Array(x.gid.buffer);
-			for (let k = 0; k < y.length; ++k)
-				g.add(y[k]);
+			for (let k = 0; k < y.length; k += 2)
+				g.add(`${y[k]},${y[k+1]}`);
 		}
-		for (const x of g) a.push(x);
-		a.sort((x, y) => x - y);
+		for (const x of g) {
+			let t = x.split(",");
+			a.push({ fid:parseInt(t[0]), gid:parseInt(t[1]) });
+		}
+		a.sort((x, y) => x.fid != y.fid? x.fid - y.fid : x.gid - y.gid);
 		print("CL", i, cluster[i].length, a.length);
 		for (let j = 0; j < cluster[i].length; ++j) {
 			const x = pj.a[cluster[i][j]];
 			print("PJ", x.key, x.n_in, x.n_out);
 		}
 		for (let j = 0; j < a.length; ++j) {
-			const x = gj.a[a[j]];
+			const x = gj[a[j].fid].a[a[j].gid];
 			print("GJ", x.key, x.info);
 		}
 		print("//");
