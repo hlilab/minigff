@@ -2,7 +2,7 @@
 
 "use strict";
 
-const gff_version = "r41";
+const gff_version = "r42";
 
 /*********************************
  * Command-line argument parsing *
@@ -1056,7 +1056,8 @@ function gff_cmd_icluster(args)
 			this.key = key;
 			this.cid = -2; // not visited
 			this.n_in = 0, this.n_out = 0;
-			this.edge_in = {}, this.edge_out = {};
+			this.edge_in = new Set();
+			this.edge_out = new Set();
 			this.gid = [];
 		}
 	}
@@ -1077,9 +1078,8 @@ function gff_cmd_icluster(args)
 			return pid;
 		}
 		#add_edge1(is_in, pid1, pid2) {
-			let h = is_in? this.a[pid1].edge_in : this.a[pid1].edge_out;
-			if (h[pid2] == null) h[pid2] = 0;
-			++h[pid2];
+			if (is_in) this.a[pid1].edge_in.add(pid2);
+			else this.a[pid1].edge_out.add(pid2);
 		}
 		add_edge(is_in, pid1, pid2) {
 			this.#add_edge1(is_in, pid1, pid2);
@@ -1087,20 +1087,20 @@ function gff_cmd_icluster(args)
 		}
 		get_nei(pid) {
 			const p = this.a[pid];
-			let h = {};
+			let h = new Set();
 			if (p.n_in > 0) {
-				for (const x in p.edge_in)
-					h[x] = 1;
+				for (const x of p.edge_in)
+					h.add(x);
 			} else {
-				for (const x in p.edge_out) {
+				for (const x of p.edge_out) {
 					const pid2 = parseInt(x);
 					if (this.a[pid2].n_in == 0) // as long as there are in-group pj, don't merge
-						h[x] = 1;
+						h.add(x);
 				}
 			}
 			let a = [];
-			for (const x in h)
-				a.push(parseInt(x));
+			for (const x of h)
+				a.push(x);
 			return a;
 		}
 	}
