@@ -2,7 +2,7 @@
 
 "use strict";
 
-const gff_version = "r46";
+const gff_version = "r47";
 
 /*********************************
  * Command-line argument parsing *
@@ -1059,14 +1059,16 @@ function gff_cmd_icluster(args)
 			this.key = key;
 			this.cid = -2; // not visited
 			this.n_in = 0, this.n_out = 0;
+			this.flt = false;
 			this.edge_in = null;
 			this.edge_out = null;
 			this.gid = new Bytes();
 		}
 	}
 	class PJunc {
-		constructor() {
+		constructor(max_edge) {
 			this.a = [], this.h = new Map();
+			this.max_edge = max_edge;
 			this._buf = new ArrayBuffer(8);
 			this._view = new Uint32Array(this._buf);
 		}
@@ -1084,14 +1086,19 @@ function gff_cmd_icluster(args)
 			return pid;
 		}
 		#add_edge1(is_in, pid1, pid2) {
+			if (this.a[pid1].flt) return;
 			if (is_in) {
 				if (this.a[pid1].edge_in == null)
 					this.a[pid1].edge_in = new Set();
 				this.a[pid1].edge_in.add(pid2);
+				if (this.a[pid1].edge_in.size >= this.max_edge)
+					this.a[pid1].flt = true;
 			} else {
 				if (this.a[pid1].edge_out == null)
 					this.a[pid1].edge_out = new Set();
 				this.a[pid1].edge_out.add(pid2);
+				if (this.a[pid1].edge_out.size >= this.max_edge)
+					this.a[pid1].flt = true;
 			}
 		}
 		add_edge(is_in, pid1, pid2) {
@@ -1122,28 +1129,38 @@ function gff_cmd_icluster(args)
 	}
 
 	// main functionality starts here
-	let in_list = "m,b,r";
-	for (const o of getopt(args, "", [])) {
+	let in_list = "m,b,r", max_edge = 100, fn_excl = null;
+	for (const o of getopt(args, "x:e:", [])) {
+		if (o.opt == "-x") fn_excl = o.arg;
+		else if (o.opt == "-e") max_edge = parseInt(o.arg);
 	}
 	if (args.length < 2) {
 		print("Usage: minigff icluster <in1.istat> <in2.istat> [...]");
 		return 1;
+	}
+	let pexcl = new Set();
+	if (fn_excl) {
+		for (const line of k8_readline(fn_excl)) {
+			let t = line.split("\t");
+			pexcl.add(`${t[0]}\t${t[1]}`);
+		}
 	}
 
 	// parse input files
 	let gj = [];
 	for (let i = 0; i < args.length; ++i)
 		gj[i] = new GJunc(in_list);
-	let pj = new PJunc();
+	let pj = new PJunc(max_edge);
 	for (let i = 0; i < args.length; ++i) {
 		let a = [];
 		for (const line of k8_readline(args[i])) {
 			let t = line.split("\t");
-			const gkey = `${t[0]}\t${t[1]}\t${t[2]}\t${t[5]}`;
-			const pkey = `${t[3]}\t${t[4]}`;
+			const pkey  = `${t[3]}\t${t[4]}`;
+			if (pexcl.has(pkey)) continue;
+			const gkey  = `${t[0]}\t${t[1]}\t${t[2]}\t${t[5]}`;
 			const ginfo = `${t[6]}\t${t[7]}\t${t[8]}\t${t[9]}`;
-			const gid = gj[i].add_junc(gkey, ginfo);
-			const pid = pj.add_junc(pkey, i, gid, gj[i].is_in(gid));
+			const gid   = gj[i].add_junc(gkey, ginfo);
+			const pid   = pj.add_junc(pkey, i, gid, gj[i].is_in(gid));
 			a.push({ gid:gid, pid:pid });
 		}
 		a.sort((x, y) => x.gid - y.gid);
@@ -1159,13 +1176,22 @@ function gff_cmd_icluster(args)
 			}
 		}
 		gj[i].h = null;
+		a = null;
 		if (typeof gc == "function") gc();
-		warn(`Parsed file "${args[i]}" (size=${pj.a.length})`);
+		let max_sz = 0;
+		for (let j = 0; j < pj.a.length; ++j) {
+			if (pj.a[j].edge_in && pj.a[j].edge_in.size > max_sz)
+				max_sz = pj.a[j].edge_in.size;
+			if (pj.a[j].edge_out && pj.a[j].edge_out.size > max_sz)
+				max_sz = pj.a[j].edge_out.size;
+		}
+		warn(`Parsed file "${args[i]}" (size=${pj.a.length}; max=${max_sz})`);
 	}
 
 	// single-linkage clustering
 	let cid = 0;
 	for (let i = 0; i < pj.a.length; ++i) {
+		if (pj.a[i].flt) continue;
 		if (pj.a[i].cid >= 0) continue;
 		let queue = [i];
 		while (queue.length > 0) {
@@ -1173,7 +1199,7 @@ function gff_cmd_icluster(args)
 			pj.a[pid].cid = cid;
 			const nei = pj.get_nei(pid);
 			for (let j = 0; j < nei.length; ++j) {
-				if (pj.a[nei[j]].cid == -2) {
+				if (pj.a[nei[j]].cid == -2 && !pj.a[nei[j]].flt) {
 					queue.push(nei[j]);
 					pj.a[nei[j]].cid = -1; // visited but final value unset
 				}
@@ -1186,7 +1212,8 @@ function gff_cmd_icluster(args)
 	let cluster = [];
 	for (let i = 0; i < cid; ++i) cluster[i] = [];
 	for (let i = 0; i < pj.a.length; ++i)
-		cluster[pj.a[i].cid].push(i);
+		if (pj.a[i].cid >= 0)
+			cluster[pj.a[i].cid].push(i);
 	for (let i = 0; i < cid; ++i) {
 		let g = new Set(), a = [];
 		for (let j = 0; j < cluster[i].length; ++j) {
