@@ -2,7 +2,7 @@
 
 "use strict";
 
-const gff_version = "r42";
+const gff_version = "r43";
 
 /*********************************
  * Command-line argument parsing *
@@ -1058,12 +1058,14 @@ function gff_cmd_icluster(args)
 			this.n_in = 0, this.n_out = 0;
 			this.edge_in = new Set();
 			this.edge_out = new Set();
-			this.gid = [];
+			this.gid = new Bytes();
 		}
 	}
 	class PJunc {
 		constructor() {
 			this.a = [], this.h = new Map();
+			this._buf = new ArrayBuffer(4);
+			this._view = new Uint32Array(this._buf);
 		}
 		add_junc(key, gid, is_in) {
 			if (!this.h.has(key)) {
@@ -1072,7 +1074,8 @@ function gff_cmd_icluster(args)
 			}
 			const pid = this.h.get(key);
 			let x = this.a[pid];
-			x.gid.push(gid);
+			this._view[0] = gid;
+			x.gid.set(this._buf);
 			if (is_in) x.n_in++;
 			else x.n_out++;
 			return pid;
@@ -1173,8 +1176,9 @@ function gff_cmd_icluster(args)
 		let g = new Set(), a = [];
 		for (let j = 0; j < cluster[i].length; ++j) {
 			const x = pj.a[cluster[i][j]];
-			for (let k = 0; k < x.gid.length; ++k)
-				g.add(x.gid[k]);
+			const y = new Uint32Array(x.gid.buffer);
+			for (let k = 0; k < y.length; ++k)
+				g.add(y[k]);
 		}
 		for (const x of g) a.push(x);
 		a.sort((x, y) => x - y);
