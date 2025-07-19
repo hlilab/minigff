@@ -2,7 +2,7 @@
 
 "use strict";
 
-const gff_version = "r48";
+const gff_version = "r49";
 
 /*********************************
  * Command-line argument parsing *
@@ -1089,20 +1089,16 @@ function gff_cmd_icluster(args)
 				if (this.a[pid1].edge_in == null)
 					this.a[pid1].edge_in = new Map();
 				let h = this.a[pid1].edge_in;
-				if (h.has(pid2)) {
-					const c = h.get(pid2);
-					h.set(pid2, c + 1);
-				} else h.set(pid2, 1);
+				if (h.has(pid2)) h.set(pid2, h.get(pid2) + 1);
+				else h.set(pid2, 1);
 				if (h.size >= this.max_edge)
 					this.a[pid1].flt = true;
 			} else {
 				if (this.a[pid1].edge_out == null)
 					this.a[pid1].edge_out = new Map();
 				let h = this.a[pid1].edge_out;
-				if (h.has(pid2)) {
-					const c = h.get(pid2);
-					h.set(pid2, c + 1);
-				} else h.set(pid2, 1);
+				if (h.has(pid2)) h.set(pid2, h.get(pid2) + 1);
+				else h.set(pid2, 1);
 				if (h.size >= this.max_edge)
 					this.a[pid1].flt = true;
 			}
@@ -1113,12 +1109,13 @@ function gff_cmd_icluster(args)
 		}
 		get_nei(pid, min_share) {
 			const p = this.a[pid];
+			if (p.flt) return [];
 			let h = new Set();
 			if (p.n_in > 0) {
 				if (p.edge_in != null)
 					for (const [pid2, v] of p.edge_in) {
 						const q = this.a[pid2];
-						if (v >= p.n_in * min_share || v >= q.n_in * min_share)
+						if (!q.flt && (v >= p.n_in * min_share || v >= q.n_in * min_share))
 							h.add(pid2);
 					}
 			} else {
@@ -1126,7 +1123,7 @@ function gff_cmd_icluster(args)
 					for (const [pid2, v] of p.edge_out) {
 						const q = this.a[pid2];
 						if (q.n_in > 0) continue;
-						if (v >= p.n_out * min_share || v >= q.n_out * min_share)
+						if (!q.flt && (v >= p.n_out * min_share || v >= q.n_out * min_share))
 							h.add(pid2);
 					}
 				}
