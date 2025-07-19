@@ -2,7 +2,7 @@
 
 "use strict";
 
-const gff_version = "r50";
+const gff_version = "r51";
 
 /*********************************
  * Command-line argument parsing *
@@ -1136,12 +1136,14 @@ function gff_cmd_icluster(args)
 	}
 
 	// main functionality starts here
-	let in_list = "", max_edge = 100, min_share_frac = 0.2, fn_excl = null;
-	for (const o of getopt(args, "x:e:g:s:", [])) {
+	let in_list = "", max_edge = 100, min_share_frac = 0.49, fn_excl = null, fn_len = null, paired_out = false;
+	for (const o of getopt(args, "x:e:g:s:2l:", [])) {
 		if (o.opt == "-x") fn_excl = o.arg;
 		else if (o.opt == "-e") max_edge = parseInt(o.arg);
 		else if (o.opt == "-g") in_list = o.arg;
 		else if (o.opt == "-s") min_share_frac = parseFloat(o.arg);
+		else if (o.opt == "-l") fn_len = o.arg, paired_out = true;
+		else if (o.opt == "-2") paired_out = true;
 	}
 	if (args.length < 2) {
 		print("Usage: minigff icluster [options] <in1.istat> <in2.istat> [...]");
@@ -1150,13 +1152,25 @@ function gff_cmd_icluster(args)
 		print(`  -e INT      drop a pjunc if it has >=INT edges [${max_edge}]`);
 		print(`  -s FLOAT    link two pjuncs if they share >=FLOAT fraction of gjuncs [${min_share_frac}]`);
 		print(`  -x FILE     exclude protein junctions in FILE []`);
+		print(`  -2          output intron stats for two samples`);
+		print(`  -l FILE     contig lengths for PAF output []`);
 		return 1;
 	}
+	if (paired_out && args.length != 2)
+		throw Error("please only provide two files with -p or -2");
 	let pexcl = new Set();
 	if (fn_excl) {
 		for (const line of k8_readline(fn_excl)) {
 			let t = line.split("\t");
 			pexcl.add(`${t[0]}\t${t[1]}`);
+		}
+	}
+	let lens = null;
+	if (fn_len) {
+		lens = {};
+		for (const line of k8_readline(fn_len)) {
+			let t = line.split("\t");
+			lens[t[0]] = parseInt(t[1]);
 		}
 	}
 
@@ -1241,16 +1255,35 @@ function gff_cmd_icluster(args)
 			a.push({ fid:parseInt(t[0]), gid:parseInt(t[1]) });
 		}
 		a.sort((x, y) => x.fid != y.fid? x.fid - y.fid : x.gid - y.gid);
-		print("CL", i, cluster[i].length, a.length);
-		for (let j = 0; j < cluster[i].length; ++j) {
-			const x = pj.a[cluster[i][j]];
-			print("PJ", x.key, x.n_in, x.n_out);
+		if (paired_out) {
+			if (a.length != 2) continue; // 1:1 ortholog only
+			if (a[0].fid == a[1].fid) continue; // must from two files
+			let x1 = gj[a[0].fid].a[a[0].gid].info.toString().split("\t");
+			let x2 = gj[a[1].fid].a[a[1].gid].info.toString().split("\t");
+			if (lens != null) {
+				if (lens[x1[0]] == null || lens[x2[0]] == null)
+					throw Error("failed to find contig lengths");
+				x1[1] = parseInt(x1[1]), x1[2] = parseInt(x1[2]);
+				x2[1] = parseInt(x2[1]), x2[2] = parseInt(x2[2]);
+				const strand = x1[3] == x2[3]? '+' : '-';
+				const blen = x1[2] - x1[1] > x2[2] - x2[1]? x1[2] - x1[1] : x2[2] - x2[1];
+				const mlen = x1[2] - x1[1] < x2[2] - x2[1]? x1[2] - x1[1] : x2[2] - x2[1];
+				print(x1[0], lens[x1[0]], x1[1], x1[2], strand, x2[0], lens[x2[0]], x2[1], x2[2], mlen, blen, 60);
+			} else {
+				print(x1.join("\t"), x2.join("\t"));
+			}
+		} else {
+			print("CL", i, cluster[i].length, a.length);
+			for (let j = 0; j < cluster[i].length; ++j) {
+				const x = pj.a[cluster[i][j]];
+				print("PJ", x.key, x.n_in, x.n_out);
+			}
+			for (let j = 0; j < a.length; ++j) {
+				const x = gj[a[j].fid].a[a[j].gid];
+				print("GJ", x.info);
+			}
+			print("//");
 		}
-		for (let j = 0; j < a.length; ++j) {
-			const x = gj[a[j].fid].a[a[j].gid];
-			print("GJ", x.info);
-		}
-		print("//");
 	}
 }
 
