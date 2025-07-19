@@ -2,7 +2,7 @@
 
 "use strict";
 
-const gff_version = "r49";
+const gff_version = "r50";
 
 /*********************************
  * Command-line argument parsing *
@@ -1136,7 +1136,7 @@ function gff_cmd_icluster(args)
 	}
 
 	// main functionality starts here
-	let in_list = "mbr", max_edge = 100, min_share_frac = 0.2, fn_excl = null;
+	let in_list = "", max_edge = 100, min_share_frac = 0.2, fn_excl = null;
 	for (const o of getopt(args, "x:e:g:s:", [])) {
 		if (o.opt == "-x") fn_excl = o.arg;
 		else if (o.opt == "-e") max_edge = parseInt(o.arg);
@@ -1146,7 +1146,7 @@ function gff_cmd_icluster(args)
 	if (args.length < 2) {
 		print("Usage: minigff icluster [options] <in1.istat> <in2.istat> [...]");
 		print("Options:");
-		print(`  -g STR      list of in-group prefix [${in_list}]`);
+		print(`  -g STR      list of in-group prefix []`);
 		print(`  -e INT      drop a pjunc if it has >=INT edges [${max_edge}]`);
 		print(`  -s FLOAT    link two pjuncs if they share >=FLOAT fraction of gjuncs [${min_share_frac}]`);
 		print(`  -x FILE     exclude protein junctions in FILE []`);
