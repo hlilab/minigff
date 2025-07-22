@@ -2,7 +2,7 @@
 
 "use strict";
 
-const gff_version = "r52";
+const gff_version = "r53";
 
 /*********************************
  * Command-line argument parsing *
@@ -454,9 +454,9 @@ function* gff_read(fn) {
 					} else if (op == 'D') {
 						x += len * 3;
 					} else if (op == 'F') {
-						x += len, y3 += 3;
-					} else if (op == 'G') {
 						x += len;
+					} else if (op == 'G') {
+						x += len, y3 += 3;
 					}
 				}
 				e.push([x0, x]);
